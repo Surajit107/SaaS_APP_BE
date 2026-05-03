@@ -51,9 +51,7 @@ export class BillingSubscriptionEmailListener {
   }
 
   @OnEvent(BillingSubscriptionEventName.Updated)
-  async onUpdated(
-    payload: BillingSubscriptionUpdatedPayload,
-  ): Promise<void> {
+  async onUpdated(payload: BillingSubscriptionUpdatedPayload): Promise<void> {
     const to = await this.users.findEarliestUserEmailByTenantId(
       payload.tenantId,
     );

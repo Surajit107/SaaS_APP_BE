@@ -1,7 +1,9 @@
 import {
   BadRequestException,
   ConflictException,
+  HttpException,
   Injectable,
+  InternalServerErrorException,
   Logger,
   UnauthorizedException,
 } from '@nestjs/common';
@@ -31,6 +33,7 @@ import {
   type TenantUserRegisteredPayload,
 } from '../common/domain-events/tenant-auth.domain-events';
 import { isTransactionUnavailableError } from '../common/mongoose/transaction.util';
+import { EmailService } from '../email/email.service';
 
 const BCRYPT_ROUNDS = 12;
 const EMAIL_VERIFY_TTL_MS = 48 * 3600 * 1000;
@@ -124,6 +127,7 @@ export class AuthService {
     private readonly refreshTokenRepository: RefreshTokenRepository,
     private readonly authIdentityRepository: AuthIdentityRepository,
     private readonly eventEmitter: EventEmitter2,
+    private readonly emailService: EmailService,
   ) {}
 
   getModuleStatus(): ApiSuccessResponse<{
@@ -211,6 +215,40 @@ export class AuthService {
     }
     const { createdUser } = registrationResult;
 
+    let delivery: 'sent' | 'skipped';
+    try {
+      delivery =
+        await this.emailService.sendOrganizerRegistrationVerificationEmail({
+          email: emailNorm,
+          organizationName: dto.organizationName.trim(),
+          displayName: displayNameTrimmed,
+          rawEmailVerificationToken,
+        });
+    } catch (err: unknown) {
+      if (err instanceof HttpException) {
+        try {
+          await this.compensateFailedRegistration({
+            userId: createdUser._id.toString(),
+            tenantMongoId: createdUser.tenantId,
+            tenantId: createdUser.tenantId,
+          });
+        } catch (rollbackErr: unknown) {
+          this.log.error(
+            `Registration rollback failed after email error: ${
+              rollbackErr instanceof Error
+                ? rollbackErr.message
+                : String(rollbackErr)
+            }`,
+            rollbackErr instanceof Error ? rollbackErr.stack : undefined,
+          );
+          throw new InternalServerErrorException(
+            'Registration could not be completed. Contact support.',
+          );
+        }
+      }
+      throw err;
+    }
+
     const registeredPayload: TenantUserRegisteredPayload = {
       tenantId: createdUser.tenantId,
       userId: createdUser._id.toString(),
@@ -231,17 +269,60 @@ export class AuthService {
         }`,
       );
     }
+
+    const emailVerificationSent = delivery === 'sent';
     return {
       success: true,
-      message:
-        'Registered. Check your inbox for a verification link before signing in.',
+      message: emailVerificationSent
+        ? 'Registered. Check your inbox for a verification link before signing in.'
+        : 'Registered. Email is not configured on this server; ask an administrator to enable outbound mail before signing in.',
       data: {
         email: emailNorm,
         tenantId: createdUser.tenantId,
         organizationName: dto.organizationName.trim(),
-        emailVerificationSent: true,
+        emailVerificationSent,
       },
     };
+  }
+
+  /**
+   * Hard-delete user + tenant created during registration when post-commit steps fail (e.g. Resend).
+   */
+  private async compensateFailedRegistration(params: {
+    userId: string;
+    tenantMongoId: string;
+    tenantId: string;
+  }): Promise<void> {
+    const mongoSession = await this.mongoConnection.startSession();
+    try {
+      try {
+        await mongoSession.withTransaction(async () => {
+          await this.userRepository.deleteByIdAndTenantId(
+            params.userId,
+            params.tenantId,
+            mongoSession,
+          );
+          await this.tenantService.deleteById(
+            params.tenantMongoId,
+            mongoSession,
+          );
+        });
+      } catch (err: unknown) {
+        if (!isTransactionUnavailableError(err)) {
+          throw err;
+        }
+        this.log.warn(
+          'Mongo transactions unavailable; compensating registration with sequential deletes',
+        );
+        await this.userRepository.deleteByIdAndTenantId(
+          params.userId,
+          params.tenantId,
+        );
+        await this.tenantService.deleteById(params.tenantMongoId);
+      }
+    } finally {
+      await mongoSession.endSession();
+    }
   }
 
   private async registerWithoutTransaction(params: {

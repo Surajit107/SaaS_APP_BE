@@ -24,7 +24,7 @@ All HTTP routes live under the **`/api`** prefix. Example: `GET /api/auth/status
 | Stored refresh tokens | Opaque refresh token in DB (rotation on refresh) |
 | Stripe | Checkout, customer portal, webhooks for subscription truth |
 | `@nestjs/event-emitter` | In-process domain events (no Redis required) |
-| **Nodemailer + SMTP** | Transactional email (e.g. Gmail app password); optional if env incomplete |
+| **Resend** | Transactional email over HTTPS API; optional if env incomplete |
 
 ---
 
@@ -76,7 +76,7 @@ flowchart LR
 | **Platform** | Implemented | Tenant list/detail/update/soft-delete, platform overview counts |
 | **Billing** | Implemented | Public plans, tenant checkout + portal, Stripe webhook, plan catalog (admin), platform subscription list/detail |
 | **Notification** | Implemented | In-app notifications; **listeners** subscribe to domain events |
-| **Email** | Implemented | **Listeners** on the same registration and billing events send SMTP mail via `EmailService` |
+| **Email** | Implemented | **Listeners** on the same registration and billing events send mail via `EmailService` (Resend) |
 | **User** | Partial | Health + example DTO endpoint (not full member management); **earliest user email** used as billing mail recipient |
 | **Workspace** | Placeholder | Module health only (no task system yet) |
 | **File** | Placeholder | Module health only (no Azure uploads yet) |
@@ -143,7 +143,7 @@ sequenceDiagram
   participant NInApp as TenantRegisteredNotificationsListener
   participant NEmail as TenantRegisteredEmailListener
   participant NI as NotificationService
-  participant SMTP as EmailService SMTP
+  participant Mail as EmailService Resend
   C->>Auth: POST /api/auth/register
   Auth->>Tenant: create organization
   Tenant-->>Auth: tenant record
@@ -154,7 +154,7 @@ sequenceDiagram
   Bus->>NInApp: parallel listeners
   Bus->>NEmail: parallel listeners
   NInApp->>NI: notifyTenant welcome in-app
-  NEmail->>SMTP: welcome email to registrant email
+  NEmail->>Mail: welcome email to registrant email
   Auth-->>C: tokens + user
 ```
 
@@ -180,7 +180,7 @@ Stripe calls **`POST /stripe/webhook`** with a signed payload. The API:
 1. Verifies **Stripe signature** (needs **raw body** in server config).
 2. **Claims** the event id (idempotent: duplicates are ignored).
 3. Updates **Mongo subscription** (and related) as needed.
-4. Publishes **domain events** (see **Domain events** section below). Multiple **listeners** react in parallel: **in-app notifications** and **transactional email** (when SMTP is configured).
+4. Publishes **domain events** (see **Domain events** section below). Multiple **listeners** react in parallel: **in-app notifications** and **transactional email** (when Resend is configured).
 
 ```mermaid
 flowchart TD
@@ -194,7 +194,7 @@ flowchart TD
   E --> L1[BillingSubscriptionNotificationsListener]
   E --> L2[BillingSubscriptionEmailListener]
   L1 --> N[NotificationService to Mongo]
-  L2 --> M[EmailService SMTP]
+  L2 --> M[EmailService Resend]
 ```
 
 Handled event types include (among others): `checkout.session.completed`, `customer.subscription.updated`, `customer.subscription.deleted`, `invoice.payment_failed`, `invoice.paid`.
@@ -218,21 +218,21 @@ Handled event types include (among others): `checkout.session.completed`, `custo
 | Registration | After successful signup + tokens | `tenant.auth.user_registered` |
 | Stripe webhook | After subscription DB updates / invoice handling | `billing.subscription.checkout_completed`, `.updated`, `.ended`, `.invoice_payment_failed`, `.invoice_paid` |
 
-**Multiple listeners per event:** For each name above, **notification** listeners (`notification/listeners/`) write **in-app** rows, and **email** listeners (`email/listeners/`) send **SMTP** mail when `EmailService` is configured. Producers (`AuthService`, `StripeWebhookService`) only **`emitAsync`**; they do not import `NotificationService` or `EmailService`, which keeps coupling low.
+**Multiple listeners per event:** For each name above, **notification** listeners (`notification/listeners/`) write **in-app** rows, and **email** listeners (`email/listeners/`) send mail via **Resend** when `EmailService` is configured. Producers (`AuthService`, `StripeWebhookService`) only **`emitAsync`**; they do not import `NotificationService` or `EmailService`, which keeps coupling low.
 
 Events run **inside the same Node process**. They are **not** a message queue; for BullMQ/Redis you would add that separately.
 
 ---
 
-## 10. Transactional email (SMTP)
+## 10. Transactional email (Resend)
 
 | Piece | Location / behavior |
 |--------|---------------------|
-| **Service** | `src/email/email.service.ts` — Nodemailer transport from env |
+| **Service** | `src/email/email.service.ts` — Resend HTTP API (`resend` package) |
 | **Welcome** | `TenantRegisteredEmailListener` — sends to the **new user’s email** from the registration payload |
 | **Billing** | `BillingSubscriptionEmailListener` — resolves recipient via **`UserRepository.findEarliestUserEmailByTenantId`** (first user by `createdAt`, i.e. org creator in the current model) |
 
-If `EMAIL_ID`, `EMAIL_APP_PASSWORD`, or `EMAIL_PORT` are missing/invalid, **`EmailService` logs once and skips sends**; API behavior (register, webhooks) is unchanged. Failures inside `sendMail` are logged and do not fail HTTP handlers.
+If `RESEND_API_KEY` or `RESEND_FROM_EMAIL` are missing, **`EmailService` logs once and skips sends**; API behavior (register, webhooks) is unchanged. Resend API errors are logged and do not fail HTTP handlers.
 
 **Portfolio caveat:** Multi-user orgs may eventually need a dedicated **billing contact** field; today “earliest user” is a deliberate default.
 
@@ -261,7 +261,7 @@ Types include subscription lifecycle + welcome (`organization_registered`) after
 ## 13. Environment variables (high level)
 
 - **Event emitter:** no dedicated variables (in-process only).
-- **Transactional email:** `EMAIL_ID`, `EMAIL_APP_PASSWORD`, `EMAIL_HOST` (optional, default Gmail), `EMAIL_PORT` (e.g. **587** for STARTTLS, **465** for SMTPS). Optional **`PLATFORM_BRAND_NAME`** (default **`Asteriq.in`**) drives the `From` display name, `[Brand]` subject prefix, and HTML template header/footer.
+- **Transactional email:** `RESEND_API_KEY`, `RESEND_FROM_EMAIL` (use a **`noreply@`** address on your verified domain — replies still hit SMTP if someone presses Reply; unmonitored mailbox + template footer state policy). Optional **`PLATFORM_BRAND_NAME`** (default **`Asteriq.in`**) drives the visible sender name (shown as **“… (No reply)”**), `[Brand]` subject prefix, and HTML template header/footer.
 
 Also:
 

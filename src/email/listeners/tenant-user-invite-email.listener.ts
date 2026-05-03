@@ -52,10 +52,15 @@ export class TenantUserInviteEmailListener {
       bodyLines: [
         greeting,
         `${inviterLabel} has invited you to join ${payload.tenantName} as ${rolePhrase}.`,
-        'Use the link below to choose a password and activate your account. This link expires in 48 hours.',
-        inviteLink,
+        'Use the button below to choose a password and activate your account. This secure link expires in 48 hours.',
+      ],
+      postActionLines: [
         'If you did not expect this invitation, you can safely ignore this email.',
       ],
+      primaryAction: {
+        href: inviteLink,
+        label: 'Accept invitation',
+      },
       footerHint: `Sent on behalf of ${payload.tenantName}. If you did not request access, you may disregard this message. Account notifications are delivered through ${brand}.`,
       textSignature: `— ${payload.tenantName}`,
       fromDisplayName: payload.tenantName,

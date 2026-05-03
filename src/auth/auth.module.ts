@@ -4,6 +4,7 @@ import { JwtModule } from '@nestjs/jwt';
 import { MongooseModule } from '@nestjs/mongoose';
 import { UserModule } from '../user/user.module';
 import { TenantModule } from '../tenant/tenant.module';
+import { EmailModule } from '../email/email.module';
 import { AuthController } from './auth.controller';
 import { AuthService } from './auth.service';
 import { JwtAuthGuard } from './guards/jwt-auth.guard';
@@ -26,6 +27,7 @@ import { parseJwtExpiresIn } from './utils/jwt-expires.util';
   imports: [
     UserModule,
     forwardRef(() => TenantModule),
+    EmailModule,
     ConfigModule,
     JwtModule.registerAsync({
       imports: [ConfigModule],
