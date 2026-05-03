@@ -84,7 +84,7 @@ function getCorsConfigFromEnv(): CorsConfig {
     process.env.CORS_ALLOWED_ORIGINS ??
     process.env.AUTH_CORS_ORIGINS ??
     process.env.CORS_ORIGINS ??
-    process.env.FRONTEND_HOST ??
+    process.env.FRONTEND_BASE_URL ??
     '';
   const configuredOrigins = rawOrigins
     .split(',')

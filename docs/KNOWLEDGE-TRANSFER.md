@@ -268,7 +268,7 @@ Also:
 - `MONGODB_URI`
 - `JWT_*` secrets and expiry settings
 - Stripe keys and webhook secret
-- `FRONTEND_HOST` (checkout/portal return URLs)
+- `FRONTEND_BASE_URL` (checkout/portal return URLs + email links)
 
 Use **`.env.example`** as the checklist (do not commit real secrets).
 

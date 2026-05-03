@@ -1,5 +1,3 @@
-import { existsSync, readFileSync } from 'node:fs';
-import { join } from 'node:path';
 import { escapeHtml } from './html-escape.util';
 
 export function formatIsoForEmail(iso: string): string {
@@ -16,23 +14,21 @@ export function formatIsoForEmail(iso: string): string {
 /** Brand accent (cyan) — aligns with product logo. */
 const CTA_BG = '#06b6d4';
 
-let cachedLogoDataUri: string | undefined;
-
-function getLogoDataUri(): string | null {
-  if (cachedLogoDataUri !== undefined) {
-    return cachedLogoDataUri || null;
+function normalizeLogoUrl(raw?: string): string | null {
+  if (!raw) {
+    return null;
+  }
+  const value = raw.trim();
+  if (value.length === 0) {
+    return null;
   }
   try {
-    const logoPath = join(__dirname, 'logo.png');
-    if (!existsSync(logoPath)) {
-      cachedLogoDataUri = '';
+    const parsed = new URL(value);
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
       return null;
     }
-    const buf = readFileSync(logoPath);
-    cachedLogoDataUri = `data:image/png;base64,${buf.toString('base64')}`;
-    return cachedLogoDataUri;
+    return parsed.toString();
   } catch {
-    cachedLogoDataUri = '';
     return null;
   }
 }
@@ -83,6 +79,7 @@ export function buildTransactionalMail(params: {
   header?: { eyebrow: string; title: string };
   textSignature?: string;
   primaryAction?: { href: string; label: string };
+  logoUrl?: string;
 }): { text: string; html: string } {
   const { brand, headline, bodyLines } = params;
   const footerHint =
@@ -118,7 +115,7 @@ export function buildTransactionalMail(params: {
     : '';
   const bodyHtmlAfter = paragraphsHtml(postCta);
 
-  const logoUri = getLogoDataUri();
+  const logoUri = normalizeLogoUrl(params.logoUrl);
   const logoBlock =
     logoUri !== null
       ? `<img src="${logoUri}" alt="${escapeHtml(brand)}" width="132" height="auto" style="display:block;max-width:140px;height:auto;border:0;outline:none;text-decoration:none;" />`

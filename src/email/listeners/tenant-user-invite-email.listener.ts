@@ -23,9 +23,10 @@ export class TenantUserInviteEmailListener {
   async onUserInvited(payload: TenantUserInvitedPayload): Promise<void> {
     const brand = this.email.platformBrand();
     const rolePhrase = formatInviteRoleSentence(payload.role);
-    const frontendBase =
-      this.config.get<string>('FRONTEND_BASE_URL')?.replace(/\/$/, '') ??
-      'http://localhost:5173';
+    const frontendBase = (
+      this.config.get<string>('FRONTEND_BASE_URL')?.trim() ||
+      'http://localhost:5173'
+    ).replace(/\/$/, '');
 
     const params = new URLSearchParams({
       token: payload.rawToken,

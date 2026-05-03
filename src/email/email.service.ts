@@ -60,6 +60,19 @@ export class EmailService {
     return shortened.length > 0 ? shortened : name;
   }
 
+  private resolveFrontendBaseUrl(): string {
+    const configured = this.config.get<string>('FRONTEND_BASE_URL')?.trim();
+    if (configured) {
+      return configured.replace(/\/$/, '');
+    }
+    return 'http://localhost:5173';
+  }
+
+  private emailLogoUrl(): string | undefined {
+    const value = this.config.get<string>('EMAIL_LOGO_URL')?.trim();
+    return value && value.length > 0 ? value : undefined;
+  }
+
   /**
    * Transactional subject: `Prefix — Subject line` (no bracket spam).
    * `subjectPrefixLabel === null` yields `subjectLine` only.
@@ -128,6 +141,7 @@ export class EmailService {
       footerHint: params.footerHint,
       header: params.header,
       textSignature: params.textSignature,
+      logoUrl: this.emailLogoUrl(),
     });
     await this.sendTransactional({
       to: params.to,
@@ -149,9 +163,7 @@ export class EmailService {
     rawEmailVerificationToken: string;
   }): Promise<'sent' | 'skipped'> {
     const brand = this.platformBrand();
-    const frontendBase =
-      this.config.get<string>('FRONTEND_BASE_URL')?.replace(/\/$/, '') ??
-      'http://localhost:5173';
+    const frontendBase = this.resolveFrontendBaseUrl();
     const query = new URLSearchParams({
       token: params.rawEmailVerificationToken,
       email: params.email,
@@ -178,6 +190,7 @@ export class EmailService {
         href: verifyLink,
         label: 'Verify email address',
       },
+      logoUrl: this.emailLogoUrl(),
     });
     const outcome = await this.deliverViaResend({
       to: params.email,

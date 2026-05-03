@@ -86,7 +86,7 @@ export class TenantBillingService {
 
   private frontendBase(): string {
     return this.configService
-      .get<string>('FRONTEND_HOST', 'http://localhost:5173')
+      .get<string>('FRONTEND_BASE_URL', 'http://localhost:5173')
       .replace(/\/$/, '');
   }
 
