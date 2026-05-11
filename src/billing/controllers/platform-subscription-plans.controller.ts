@@ -8,6 +8,7 @@ import {
   Param,
   Patch,
   Post,
+  Query,
   UseGuards,
 } from '@nestjs/common';
 import {
@@ -15,6 +16,7 @@ import {
   ApiBody,
   ApiOperation,
   ApiParam,
+  ApiQuery,
   ApiResponse,
   ApiTags,
 } from '@nestjs/swagger';
@@ -23,6 +25,18 @@ import { PlatformAdminGuard } from '../../auth/guards/platform-admin.guard';
 import { CreateSubscriptionPlanDto } from '../dto/create-subscription-plan.dto';
 import { UpdateSubscriptionPlanDto } from '../dto/update-subscription-plan.dto';
 import { SubscriptionPlanAdminService } from '../services/subscription-plan-admin.service';
+
+/** `includeArchived=0|false|no` limits Mongo query to active plans; omit or truthy = full catalog. */
+function parseIncludeArchivedQuery(raw?: string): boolean {
+  if (raw === undefined || raw === null) {
+    return true;
+  }
+  const t = String(raw).trim().toLowerCase();
+  if (t === '0' || t === 'false' || t === 'no') {
+    return false;
+  }
+  return true;
+}
 
 @ApiTags('Platform admin')
 @Controller('platform/subscription-plans')
@@ -62,6 +76,30 @@ export class PlatformSubscriptionPlansController {
   @ApiResponse({ status: 200, description: 'Catalog plans (newest first)' })
   list() {
     return this.subscriptionPlanAdmin.list(false, false);
+  }
+
+  /** Static segment must be registered before `:planId` so `admin` is not parsed as a Mongo id. */
+  @Get('admin')
+  @UseGuards(JwtAuthGuard, PlatformAdminGuard)
+  @ApiBearerAuth('access-token')
+  @ApiOperation({
+    summary:
+      'Full subscription plan catalog for platform operators (includes archived rows and Stripe product ids).',
+  })
+  @ApiResponse({ status: 401, description: 'Missing or invalid access token' })
+  @ApiResponse({ status: 403, description: 'Not a platform administrator' })
+  @ApiQuery({
+    name: 'includeArchived',
+    required: false,
+    description:
+      'Set to 0, false, or no to return active plans only; omit or truthy for full catalog including archived.',
+    schema: { type: 'string', enum: ['0', '1', 'true', 'false', 'yes', 'no'] },
+  })
+  adminCatalog(
+    @Query('includeArchived') includeArchivedRaw?: string,
+  ) {
+    const wantArchivedRows = parseIncludeArchivedQuery(includeArchivedRaw);
+    return this.subscriptionPlanAdmin.list(wantArchivedRows, true);
   }
 
   @Get(':planId')

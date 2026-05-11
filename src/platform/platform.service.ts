@@ -5,6 +5,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { Types } from 'mongoose';
+import { SubscriptionRepository } from '../billing/repositories/subscription.repository';
 import type { ApiSuccessResponse } from '../common/types/api-response.types';
 import { UpdateTenantDto } from '../tenant/dto/update-tenant.dto';
 import { toTenantPublic } from '../tenant/mappers/tenant-public.mapper';
@@ -13,16 +14,22 @@ import type { TenantPublic } from '../tenant/types/tenant-public.types';
 import { UserRepository } from '../user/repositories/user.repository';
 import type { PlatformTenantListQueryDto } from './dto/platform-tenant-list-query.dto';
 
+/** Tenant directory row plus Mongo billing summary for platform list UI. */
+export type PlatformTenantListItem = TenantPublic & {
+  subscription: { status: string; planKey: string } | null;
+};
+
 @Injectable()
 export class PlatformService {
   constructor(
     private readonly tenantRepository: TenantRepository,
     private readonly userRepository: UserRepository,
+    private readonly subscriptionRepository: SubscriptionRepository,
   ) {}
 
   async listTenants(query: PlatformTenantListQueryDto): Promise<
     ApiSuccessResponse<{
-      items: TenantPublic[];
+      items: PlatformTenantListItem[];
       total: number;
       page: number;
       limit: number;
@@ -40,11 +47,22 @@ export class PlatformService {
         search: query.search,
         isActive: query.isActive,
       });
+    const tenantIds = items.map((d) => d.tenantId);
+    const subsByTenant =
+      await this.subscriptionRepository.findSummariesByTenantIds(tenantIds);
+    const listItems: PlatformTenantListItem[] = items.map((d) => {
+      const base = toTenantPublic(d);
+      const sub = subsByTenant.get(d.tenantId);
+      return {
+        ...base,
+        subscription: sub !== undefined ? sub : null,
+      };
+    });
     return {
       success: true,
       message: 'OK',
       data: {
-        items: items.map((d) => toTenantPublic(d)),
+        items: listItems,
         total,
         page,
         limit,

@@ -210,4 +210,45 @@ export class TenantRepository {
   countAllForPlatformAdmin(): Promise<number> {
     return this.model.countDocuments({}).exec();
   }
+
+  /**
+   * Per-day signup counts (`createdAt` bucketed by UTC day) since `from`, inclusive.
+   * Includes soft-deleted rows so the historical signal isn't distorted by recent deletes.
+   */
+  async aggregateDailySignupsForPlatformAdmin(
+    from: Date,
+  ): Promise<Array<{ date: string; newTenants: number }>> {
+    type Row = { _id: string; newTenants: number };
+    const rows = await this.model
+      .aggregate<Row>([
+        { $match: { createdAt: { $gte: from } } },
+        {
+          $group: {
+            _id: {
+              $dateToString: {
+                format: '%Y-%m-%d',
+                date: '$createdAt',
+                timezone: 'UTC',
+              },
+            },
+            newTenants: { $sum: 1 },
+          },
+        },
+        { $sort: { _id: 1 } },
+      ])
+      .exec();
+    return rows.map((r) => ({ date: r._id, newTenants: r.newTenants }));
+  }
+
+  /** Tenants created strictly before `cutoff` (used as a seed for the cumulative line at window start). */
+  countCreatedBeforeForPlatformAdmin(cutoff: Date): Promise<number> {
+    return this.model.countDocuments({ createdAt: { $lt: cutoff } }).exec();
+  }
+
+  /** Soft-deleted tenants (deletedAt set; may or may not be past TTL). */
+  countDeletedForPlatformAdmin(): Promise<number> {
+    return this.model
+      .countDocuments({ deletedAt: { $type: 'date' } })
+      .exec();
+  }
 }

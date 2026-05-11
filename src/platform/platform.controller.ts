@@ -20,15 +20,36 @@ import {
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { PlatformAdminGuard } from '../auth/guards/platform-admin.guard';
 import { UpdateTenantDto } from '../tenant/dto/update-tenant.dto';
+import {
+  PLATFORM_ANALYTICS_DEFAULT_RANGE_DAYS,
+  PlatformAnalyticsQueryDto,
+} from './dto/platform-analytics-query.dto';
 import { PlatformTenantListQueryDto } from './dto/platform-tenant-list-query.dto';
 import { PlatformService } from './platform.service';
+import { PlatformAnalyticsService } from './services/platform-analytics.service';
 
 @ApiTags('Platform admin')
 @ApiBearerAuth('access-token')
 @UseGuards(JwtAuthGuard, PlatformAdminGuard)
 @Controller('platform')
 export class PlatformController {
-  constructor(private readonly platformService: PlatformService) {}
+  constructor(
+    private readonly platformService: PlatformService,
+    private readonly analyticsService: PlatformAnalyticsService,
+  ) {}
+
+  @Get('analytics')
+  @ApiOperation({
+    summary:
+      'Aggregated platform analytics for graphing (live Mongo aggregations; MRR/ARR derived from active+trialing subs)',
+  })
+  @ApiResponse({ status: 401, description: 'Missing or invalid access token' })
+  @ApiResponse({ status: 403, description: 'Not a platform administrator' })
+  analytics(@Query() query: PlatformAnalyticsQueryDto) {
+    return this.analyticsService.getAnalytics(
+      query.days ?? PLATFORM_ANALYTICS_DEFAULT_RANGE_DAYS,
+    );
+  }
 
   @Get('overview')
   @ApiOperation({

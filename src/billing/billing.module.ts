@@ -62,6 +62,7 @@ import { TenantBillingService } from './services/tenant-billing.service';
   exports: [
     BillingService,
     SubscriptionPlanAdminService,
+    SubscriptionRepository,
     TenantBillingService,
     StripeClientService,
     SubscriptionEntitlementsService,
