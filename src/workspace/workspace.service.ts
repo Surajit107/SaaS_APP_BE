@@ -24,6 +24,7 @@ import { WorkspaceRepository } from './repositories/workspace.repository';
 import { TaskDocument } from './schemas/task.schema';
 import { WorkspaceDocument } from './schemas/workspace.schema';
 import { TaskRepository } from './repositories/task.repository';
+import { WorkspaceBoardRealtimePublisher } from './realtime/workspace-board-realtime.publisher';
 import { TaskPublic, TaskStatus, TaskStatusCounts } from './types/task.types';
 
 export type WorkspacePublic = {
@@ -43,6 +44,7 @@ export class WorkspaceService {
     private readonly fileService: FileService,
     private readonly eventEmitter: EventEmitter2,
     private readonly entitlements: SubscriptionEntitlementsService,
+    private readonly workspaceBoardRealtime: WorkspaceBoardRealtimePublisher,
   ) {}
 
   getModuleStatus(): ApiSuccessResponse<{
@@ -228,6 +230,9 @@ export class WorkspaceService {
       };
       await this.eventEmitter.emitAsync(TaskEventName.Completed, completedPayload);
     }
+
+    this.workspaceBoardRealtime.publishTasksChanged(user.tenantId, workspaceId);
+    this.publishMemberMyTasksInboxRefresh(user.tenantId, created.assignedTo);
 
     return {
       success: true,
@@ -446,6 +451,12 @@ export class WorkspaceService {
       await this.eventEmitter.emitAsync(TaskEventName.Completed, completedPayload);
     }
 
+    this.workspaceBoardRealtime.publishTasksChanged(user.tenantId, workspaceId);
+    this.publishMemberMyTasksInboxRefresh(user.tenantId, updated.assignedTo);
+    if (previousAssignedTo && previousAssignedTo !== updated.assignedTo) {
+      this.publishMemberMyTasksInboxRefresh(user.tenantId, previousAssignedTo);
+    }
+
     return {
       success: true,
       message: 'Task updated',
@@ -484,6 +495,9 @@ export class WorkspaceService {
     if (!deleted) {
       throw new NotFoundException('Task not found');
     }
+
+    this.workspaceBoardRealtime.publishTasksChanged(user.tenantId, workspaceId);
+    this.publishMemberMyTasksInboxRefresh(user.tenantId, existing.assignedTo);
 
     return {
       success: true,
@@ -544,6 +558,16 @@ export class WorkspaceService {
   }
 
   // ─── Private helpers ──────────────────────────────────────────────────────
+
+  /** Push a lightweight signal so the assignee’s cross-workspace task list can refetch. */
+  private publishMemberMyTasksInboxRefresh(
+    tenantId: string,
+    userId: string | null | undefined,
+  ): void {
+    if (typeof userId === 'string' && userId.trim().length > 0) {
+      this.workspaceBoardRealtime.publishMemberMyTasksChanged(tenantId, userId);
+    }
+  }
 
   private isTenantMember(user: AuthenticatedRequestUser): boolean {
     return user.platformAdmin !== true && user.tenantRole === 'member';

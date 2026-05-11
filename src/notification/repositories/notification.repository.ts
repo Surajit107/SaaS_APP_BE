@@ -50,7 +50,13 @@ export class NotificationRepository {
   ): Promise<NotificationDocument[]> {
     const filter =
       audience.kind === 'admin'
-        ? { tenantId }
+        ? {
+            tenantId,
+            $or: [
+              { recipientUserId: { $exists: false } },
+              { recipientUserId: null },
+            ],
+          }
         : { tenantId, recipientUserId: audience.userId };
     return this.model
       .find(filter)
@@ -82,5 +88,29 @@ export class NotificationRepository {
     }
     doc.status = 'read';
     return doc.save();
+  }
+
+  async markAllInAppReadForAudience(input: {
+    tenantId: string;
+    userId: string;
+    listAsAdmin: boolean;
+  }): Promise<{ matched: number; modified: number }> {
+    const filter = input.listAsAdmin
+      ? {
+          tenantId: input.tenantId,
+          $or: [{ recipientUserId: { $exists: false } }, { recipientUserId: null }],
+          status: { $ne: 'read' },
+        }
+      : {
+          tenantId: input.tenantId,
+          recipientUserId: input.userId,
+          status: { $ne: 'read' },
+        };
+
+    const res = await this.model.updateMany(filter, { $set: { status: 'read' } }).exec();
+    return {
+      matched: typeof res.matchedCount === 'number' ? res.matchedCount : 0,
+      modified: typeof res.modifiedCount === 'number' ? res.modifiedCount : 0,
+    };
   }
 }

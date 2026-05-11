@@ -5,11 +5,13 @@ import {
   NotificationRepository,
   type CreateTenantNotificationInput,
 } from './repositories/notification.repository';
+import { NotificationRealtimePublisher } from './realtime/notification-realtime.publisher';
 
 @Injectable()
 export class NotificationService {
   constructor(
     private readonly notificationRepository: NotificationRepository,
+    private readonly realtimePublisher: NotificationRealtimePublisher,
   ) {}
 
   getModuleStatus(): ApiSuccessResponse<{
@@ -27,7 +29,8 @@ export class NotificationService {
   }
 
   async notifyTenant(input: CreateTenantNotificationInput): Promise<void> {
-    await this.notificationRepository.createInApp(input);
+    const created = await this.notificationRepository.createInApp(input);
+    this.realtimePublisher.publishCreated(created);
   }
 
   async listForCurrentUser(
@@ -101,6 +104,23 @@ export class NotificationService {
         id: String(updated._id),
         status: updated.status,
       },
+    };
+  }
+
+  async markAllInAppRead(
+    user: AuthenticatedRequestUser,
+  ): Promise<ApiSuccessResponse<{ matched: number; modified: number }>> {
+    const listAsAdmin =
+      user.platformAdmin === true || user.tenantRole !== 'member';
+    const res = await this.notificationRepository.markAllInAppReadForAudience({
+      tenantId: user.tenantId,
+      userId: user.userId,
+      listAsAdmin,
+    });
+    return {
+      success: true,
+      message: 'Marked all read',
+      data: res,
     };
   }
 }

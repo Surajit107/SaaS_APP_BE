@@ -8,6 +8,8 @@ import { TaskRepository } from './repositories/task.repository';
 import { WorkspaceRepository } from './repositories/workspace.repository';
 import { WorkspaceController } from './workspace.controller';
 import { WorkspaceService } from './workspace.service';
+import { WorkspaceBoardRealtimeGateway } from './realtime/workspace-board-realtime.gateway';
+import { WorkspaceBoardRealtimePublisher } from './realtime/workspace-board-realtime.publisher';
 import { Task, TaskSchema } from './schemas/task.schema';
 import { Workspace, WorkspaceSchema } from './schemas/workspace.schema';
 
@@ -23,7 +25,13 @@ import { Workspace, WorkspaceSchema } from './schemas/workspace.schema';
     ]),
   ],
   controllers: [WorkspaceController],
-  providers: [TaskRepository, WorkspaceRepository, WorkspaceService],
+  providers: [
+    TaskRepository,
+    WorkspaceRepository,
+    WorkspaceService,
+    WorkspaceBoardRealtimeGateway,
+    WorkspaceBoardRealtimePublisher,
+  ],
   exports: [WorkspaceService],
 })
 export class WorkspaceModule {}

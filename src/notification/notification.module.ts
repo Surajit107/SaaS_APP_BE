@@ -10,6 +10,8 @@ import {
   Notification,
   NotificationSchema,
 } from './schemas/notification.schema';
+import { NotificationRealtimeGateway } from './realtime/notification-realtime.gateway';
+import { NotificationRealtimePublisher } from './realtime/notification-realtime.publisher';
 
 @Module({
   imports: [
@@ -21,6 +23,8 @@ import {
   providers: [
     NotificationRepository,
     NotificationService,
+    NotificationRealtimeGateway,
+    NotificationRealtimePublisher,
     BillingSubscriptionNotificationsListener,
     TaskAssignedNotificationsListener,
     TenantRegisteredNotificationsListener,

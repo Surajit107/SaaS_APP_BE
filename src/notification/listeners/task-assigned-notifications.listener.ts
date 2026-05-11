@@ -23,6 +23,7 @@ export class TaskAssignedNotificationsListener {
         body: 'Open your workspace dashboard to view and update the task.',
         metadata: {
           taskId: payload.taskId,
+          workspaceId: payload.workspaceId,
           assignedBy: payload.assignedBy,
         },
       });

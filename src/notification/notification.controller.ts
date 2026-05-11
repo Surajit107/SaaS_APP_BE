@@ -50,4 +50,15 @@ export class NotificationController {
   ) {
     return this.notificationService.markInAppRead(user, notificationId);
   }
+
+  @Patch('in-app/read-all')
+  @ApiBearerAuth('access-token')
+  @UseGuards(JwtAuthGuard, TenantGuard)
+  @ApiOperation({
+    summary:
+      'Mark all in-app notifications as read (tenant admins: org-wide only; members: their inbox only)',
+  })
+  markAllInAppRead(@CurrentUser() user: AuthenticatedRequestUser) {
+    return this.notificationService.markAllInAppRead(user);
+  }
 }
