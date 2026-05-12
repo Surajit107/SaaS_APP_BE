@@ -16,6 +16,7 @@ import { TenantModule } from './tenant/tenant.module';
 import { TenantUserModule } from './tenant-user/tenant-user.module';
 import { UserModule } from './user/user.module';
 import { WorkspaceModule } from './workspace/workspace.module';
+import { ChatbotModule } from './chatbot/chatbot.module';
 
 @Module({
   imports: [
@@ -48,6 +49,7 @@ import { WorkspaceModule } from './workspace/workspace.module';
     FileModule,
     NotificationModule,
     EmailModule,
+    ChatbotModule,
   ],
   controllers: [AppController],
   providers: [AppService],

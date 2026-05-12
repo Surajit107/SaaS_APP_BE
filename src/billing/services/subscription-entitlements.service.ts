@@ -1,6 +1,7 @@
 import { ForbiddenException, Injectable } from '@nestjs/common';
 import { SubscriptionPlanRepository } from '../repositories/subscription-plan.repository';
 import { SubscriptionRepository } from '../repositories/subscription.repository';
+import { isPlanNameAiChatbotTier } from '../utils/subscription-plan-ai-chatbot.util';
 
 /**
  * Resolved feature caps for a tenant's current subscription.
@@ -147,6 +148,68 @@ export class SubscriptionEntitlementsService {
       throw new ForbiddenException(
         `Your plan allows a maximum of ${maxWorkspaces} ${maxWorkspaces === 1 ? 'workspace' : 'workspaces'}. ` +
           'Upgrade your subscription to create more workspaces.',
+      );
+    }
+  }
+
+  /**
+   * Whether the tenant may use the AI assistant.
+   *
+   * Resolution: load the catalog plan by `subscription.stripePriceId`. If a row exists, only that
+   * row decides access (`features.aiChatbot` overrides Pro/Enterprise name defaults). If no row is
+   * found, fall back to `subscription.planKey` matching Pro/Enterprise tier names (legacy /
+   * migration path).
+   */
+  async resolveAiChatbotAccess(tenantId: string): Promise<boolean> {
+    const subscription = await this.subscriptionRepository.findByTenantId(tenantId);
+
+    const hasActiveSubscription =
+      subscription !== null &&
+      ACTIVE_STATUSES.has(subscription.status) &&
+      typeof subscription.stripePriceId === 'string' &&
+      subscription.stripePriceId.length > 0;
+
+    if (!hasActiveSubscription) {
+      return false;
+    }
+
+    const plan = await this.planRepository.findByStripePriceIdIncludingArchived(
+      subscription.stripePriceId as string,
+    );
+
+    if (plan) {
+      const flag = plan.features?.aiChatbot;
+      if (flag === false) {
+        return false;
+      }
+      if (flag === true) {
+        return true;
+      }
+      if (isPlanNameAiChatbotTier(plan.name)) {
+        return true;
+      }
+      // Catalog row exists but does not grant AI (e.g. custom tier name, no override). Do not fall
+      // back to `subscription.planKey` — that mirror can lag or disagree and would override an
+      // explicit catalog decision such as `features.aiChatbot: false` on Pro/Enterprise.
+      return false;
+    }
+
+    const planKey = typeof subscription.planKey === 'string' ? subscription.planKey : '';
+    if (planKey.length > 0 && isPlanNameAiChatbotTier(planKey)) {
+      return true;
+    }
+
+    return false;
+  }
+
+  /**
+   * Throws `ForbiddenException` when the tenant subscription does not include AI assistant access.
+   */
+  async assertTenantHasAiChatbotAccess(tenantId: string): Promise<void> {
+    const allowed = await this.resolveAiChatbotAccess(tenantId);
+    if (!allowed) {
+      throw new ForbiddenException(
+        'The AI assistant is included with Pro and Enterprise. Upgrade your subscription to unlock contextual help for your workspace.',
       );
     }
   }

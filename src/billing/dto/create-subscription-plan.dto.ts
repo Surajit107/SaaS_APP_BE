@@ -41,6 +41,14 @@ export class SubscriptionPlanFeaturesDto {
   @IsNumber()
   @Min(0)
   maxStorageMb?: number;
+
+  @ApiPropertyOptional({
+    description:
+      'Override AI assistant access for this plan (only allowed when the plan name is Pro or Enterprise tier). Omit to derive from plan name.',
+  })
+  @IsOptional()
+  @IsBoolean()
+  aiChatbot?: boolean;
 }
 
 export class CreateSubscriptionPlanDto {

@@ -16,6 +16,10 @@ import { SubscriptionRepository } from '../repositories/subscription.repository'
 import { StripeClientService } from './stripe-client.service';
 import { sortSubscriptionPlansByDisplayOrder } from '../utils/subscription-plan-display-order.util';
 import type { AuthenticatedRequestUser } from '../../auth/types/auth-request-user.types';
+import {
+  serializeSubscriptionPlan,
+  type SubscriptionPlanResponse,
+} from '../utils/subscription-plan-response.util';
 
 type CheckoutSessionPayload = {
   status?: string | null;
@@ -56,23 +60,7 @@ type StripeUpcomingInvoicePayload = {
   } | null;
 };
 
-type TenantSubscriptionPlanSummary = {
-  id: string;
-  name: string;
-  amount: number;
-  currency: string;
-  interval: string;
-  trialDays: number;
-  isTrialEnabled: boolean;
-  featureHighlights: string[];
-};
-
-type BillingPlanFeatureLimits = {
-  maxWorkspaces?: number;
-  maxUsers?: number;
-  maxFileAssets?: number;
-  maxStorageMb?: number;
-};
+type TenantSubscriptionPlanSummary = SubscriptionPlanResponse;
 
 @Injectable()
 export class TenantBillingService {
@@ -91,20 +79,7 @@ export class TenantBillingService {
   }
 
   async listPublicPlans(): Promise<
-    ApiSuccessResponse<
-      Array<{
-        id: string;
-        name: string;
-        stripePriceId: string;
-        amount: number;
-        currency: string;
-        interval: string;
-        trialDays: number;
-        isTrialEnabled: boolean;
-        features: BillingPlanFeatureLimits | null;
-        featureHighlights: string[];
-      }>
-    >
+    ApiSuccessResponse<SubscriptionPlanResponse[]>
   > {
     const rows = sortSubscriptionPlansByDisplayOrder(
       await this.plans.findMany({ includeArchived: false }),
@@ -112,33 +87,24 @@ export class TenantBillingService {
     return {
       success: true,
       message: 'OK',
-      data: rows.map((p) => ({
-        id: String(p._id),
-        name: p.name,
-        stripePriceId: p.stripePriceId,
-        amount: p.amount,
-        currency: p.currency,
-        interval: p.interval,
-        trialDays: p.trialDays,
-        isTrialEnabled: p.isTrialEnabled,
-        features: p.features
-          ? {
-              ...(typeof p.features.maxWorkspaces === 'number'
-                ? { maxWorkspaces: p.features.maxWorkspaces }
-                : {}),
-              ...(typeof p.features.maxUsers === 'number'
-                ? { maxUsers: p.features.maxUsers }
-                : {}),
-              ...(typeof p.features.maxFileAssets === 'number'
-                ? { maxFileAssets: p.features.maxFileAssets }
-                : {}),
-              ...(typeof p.features.maxStorageMb === 'number'
-                ? { maxStorageMb: p.features.maxStorageMb }
-                : {}),
-            }
-          : null,
-        featureHighlights: this.toFeatureHighlights(p.features),
-      })),
+      data: rows.map((p) =>
+        serializeSubscriptionPlan(p, { includeAdminFields: false }),
+      ),
+    };
+  }
+
+  async getPublicPlanById(
+    planId: string,
+  ): Promise<ApiSuccessResponse<SubscriptionPlanResponse>> {
+    const plan = await this.plans.findById(planId);
+    if (!plan || plan.archived) {
+      throw new NotFoundException('Subscription plan not found');
+    }
+
+    return {
+      success: true,
+      message: 'OK',
+      data: serializeSubscriptionPlan(plan, { includeAdminFields: false }),
     };
   }
 
@@ -285,16 +251,7 @@ export class TenantBillingService {
         nextBillingDate: nextBilling?.nextBillingDate,
         nextBillingInDays: nextBilling?.nextBillingInDays,
         plan: planDoc
-          ? {
-              id: String(planDoc._id),
-              name: planDoc.name,
-              amount: planDoc.amount,
-              currency: planDoc.currency,
-              interval: planDoc.interval,
-              trialDays: planDoc.trialDays,
-              isTrialEnabled: planDoc.isTrialEnabled,
-              featureHighlights: this.toFeatureHighlights(planDoc.features),
-            }
+          ? serializeSubscriptionPlan(planDoc, { includeAdminFields: false })
           : null,
       },
     };
@@ -707,29 +664,6 @@ export class TenantBillingService {
       nextBillingDate: periodEnd.toISOString(),
       nextBillingInDays: daysUntilBilling,
     };
-  }
-
-  private toFeatureHighlights(
-    features: BillingPlanFeatureLimits | null | undefined,
-  ): string[] {
-    if (!features) {
-      return [];
-    }
-
-    const highlights: string[] = [];
-    if (typeof features.maxWorkspaces === 'number') {
-      highlights.push(`${features.maxWorkspaces} workspaces`);
-    }
-    if (typeof features.maxUsers === 'number') {
-      highlights.push(`${features.maxUsers} users`);
-    }
-    if (typeof features.maxFileAssets === 'number') {
-      highlights.push(`${features.maxFileAssets} file assets`);
-    }
-    if (typeof features.maxStorageMb === 'number') {
-      highlights.push(`${features.maxStorageMb} MB storage`);
-    }
-    return highlights;
   }
 
   private async resolveInvoiceChargeId(

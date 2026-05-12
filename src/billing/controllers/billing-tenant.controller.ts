@@ -1,5 +1,5 @@
-import { Body, Controller, Get, Post, UseGuards } from '@nestjs/common';
-import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
+import { Body, Controller, Get, Param, Post, UseGuards } from '@nestjs/common';
+import { ApiBearerAuth, ApiOperation, ApiParam, ApiTags } from '@nestjs/swagger';
 import { CurrentUser } from '../../auth/decorators/current-user.decorator';
 import { JwtAuthGuard } from '../../auth/guards/jwt-auth.guard';
 import { TenantGuard } from '../../auth/guards/tenant.guard';
@@ -19,6 +19,16 @@ export class BillingTenantController {
   @ApiOperation({ summary: 'Public catalog of sellable plans' })
   listPlans() {
     return this.tenantBilling.listPublicPlans();
+  }
+
+  @Get('plans/:planId')
+  @ApiParam({
+    name: 'planId',
+    description: 'Subscription plan document id (Mongo ObjectId hex)',
+  })
+  @ApiOperation({ summary: 'Public detail for one sellable plan' })
+  getPlan(@Param('planId') planId: string) {
+    return this.tenantBilling.getPublicPlanById(planId);
   }
 
   @Get('subscription')

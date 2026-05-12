@@ -22,6 +22,15 @@ export class SubscriptionPlanFeatures {
   /** Total storage quota in megabytes (for when `file_assets` track size). */
   @Prop()
   maxStorageMb?: number;
+
+  /**
+   * When `true`, tenant users on this plan may use the AI assistant (only valid for Pro / Enterprise catalog names;
+   * enforced in `SubscriptionPlanAdminService`).
+   * When `false`, AI is disabled for this plan even if the name looks like Pro/Enterprise.
+   * When omitted, access follows plan name (Pro / Enterprise) — see `SubscriptionEntitlementsService`.
+   */
+  @Prop()
+  aiChatbot?: boolean;
 }
 
 export type SubscriptionPlanDocument = HydratedDocument<SubscriptionPlan>;

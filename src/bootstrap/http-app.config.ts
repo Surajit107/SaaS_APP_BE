@@ -64,6 +64,7 @@ export function configureHttpApp(app: INestApplication): void {
     .addTag('Workspace', 'Workspaces')
     .addTag('File', 'File metadata and storage')
     .addTag('Notification', 'Notifications')
+    .addTag('Chatbot', 'Tenant AI assistant')
     .build();
 
   const document = SwaggerModule.createDocument(app, swaggerConfig);

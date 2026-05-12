@@ -102,6 +102,24 @@ export class PlatformSubscriptionPlansController {
     return this.subscriptionPlanAdmin.list(wantArchivedRows, true);
   }
 
+  @Get('admin/:planId')
+  @UseGuards(JwtAuthGuard, PlatformAdminGuard)
+  @ApiBearerAuth('access-token')
+  @ApiParam({
+    name: 'planId',
+    description: 'Subscription plan document id (Mongo ObjectId hex)',
+  })
+  @ApiOperation({
+    summary:
+      'Full subscription plan detail for platform operators (includes Stripe product id and archived state).',
+  })
+  @ApiResponse({ status: 401, description: 'Missing or invalid access token' })
+  @ApiResponse({ status: 403, description: 'Not a platform administrator' })
+  @ApiResponse({ status: 404, description: 'Plan not found' })
+  adminDetail(@Param('planId') planId: string) {
+    return this.subscriptionPlanAdmin.getById(planId, true);
+  }
+
   @Get(':planId')
   @ApiParam({
     name: 'planId',

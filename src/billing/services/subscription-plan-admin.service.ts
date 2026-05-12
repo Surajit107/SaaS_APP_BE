@@ -9,8 +9,12 @@ import { SubscriptionPlanRepository } from '../repositories/subscription-plan.re
 import { StripeClientService } from './stripe-client.service';
 import { CreateSubscriptionPlanDto } from '../dto/create-subscription-plan.dto';
 import { UpdateSubscriptionPlanDto } from '../dto/update-subscription-plan.dto';
-import type { SubscriptionPlanDocument } from '../schemas/subscription-plan.schema';
 import { sortSubscriptionPlansByDisplayOrder } from '../utils/subscription-plan-display-order.util';
+import { isPlanNameAiChatbotTier } from '../utils/subscription-plan-ai-chatbot.util';
+import {
+  serializeSubscriptionPlan,
+  type SubscriptionPlanResponse,
+} from '../utils/subscription-plan-response.util';
 
 @Injectable()
 export class SubscriptionPlanAdminService {
@@ -39,7 +43,16 @@ export class SubscriptionPlanAdminService {
 
   async create(
     dto: CreateSubscriptionPlanDto,
-  ): Promise<ApiSuccessResponse<{ id: string }>> {
+  ): Promise<ApiSuccessResponse<SubscriptionPlanResponse>> {
+    if (
+      dto.features?.aiChatbot === true &&
+      !isPlanNameAiChatbotTier(dto.name)
+    ) {
+      throw new BadRequestException(
+        'AI assistant catalog override is only allowed for Pro or Enterprise plan names.',
+      );
+    }
+
     const currency = (dto.currency ?? 'usd').toLowerCase();
     const stripe = this.stripeClient.getStripe();
 
@@ -72,7 +85,7 @@ export class SubscriptionPlanAdminService {
     return {
       success: true,
       message: 'Subscription plan created',
-      data: { id: String(doc._id) },
+      data: serializeSubscriptionPlan(doc, { includeAdminFields: true }),
     };
   }
 
@@ -80,24 +93,7 @@ export class SubscriptionPlanAdminService {
     includeArchived: boolean,
     viewerIsPlatformAdmin: boolean,
   ): Promise<
-    ApiSuccessResponse<
-      Array<{
-        id: string;
-        name: string;
-        stripePriceId: string;
-        amount: number;
-        currency: string;
-        interval: string;
-        trialDays: number;
-        isTrialEnabled: boolean;
-        features?: SubscriptionPlanDocument['features'];
-        createdAt: string;
-        /** Present only for platform administrators. */
-        stripeProductId?: string;
-        /** Present only for platform administrators. */
-        archived?: boolean;
-      }>
-    >
+    ApiSuccessResponse<SubscriptionPlanResponse[]>
   > {
     const effectiveIncludeArchived =
       viewerIsPlatformAdmin && includeArchived === true;
@@ -110,31 +106,11 @@ export class SubscriptionPlanAdminService {
     return {
       success: true,
       message: 'OK',
-      data: rows.map((p) => {
-        const createdAt = (
-          p as SubscriptionPlanDocument & { createdAt: Date }
-        ).createdAt.toISOString();
-        const base = {
-          id: String(p._id),
-          name: p.name,
-          stripePriceId: p.stripePriceId,
-          amount: p.amount,
-          currency: p.currency,
-          interval: p.interval,
-          trialDays: p.trialDays,
-          isTrialEnabled: p.isTrialEnabled,
-          features: p.features,
-          createdAt,
-        };
-        if (viewerIsPlatformAdmin) {
-          return {
-            ...base,
-            stripeProductId: p.stripeProductId,
-            archived: p.archived,
-          };
-        }
-        return base;
-      }),
+      data: rows.map((p) =>
+        serializeSubscriptionPlan(p, {
+          includeAdminFields: viewerIsPlatformAdmin,
+        }),
+      ),
     };
   }
 
@@ -142,19 +118,7 @@ export class SubscriptionPlanAdminService {
     id: string,
     viewerIsPlatformAdmin: boolean,
   ): Promise<
-    ApiSuccessResponse<{
-      id: string;
-      name: string;
-      stripePriceId: string;
-      amount: number;
-      currency: string;
-      interval: string;
-      trialDays: number;
-      isTrialEnabled: boolean;
-      features?: SubscriptionPlanDocument['features'];
-      stripeProductId?: string;
-      archived?: boolean;
-    }>
+    ApiSuccessResponse<SubscriptionPlanResponse>
   > {
     const p = await this.plans.findById(id);
     if (!p) {
@@ -163,32 +127,12 @@ export class SubscriptionPlanAdminService {
     if (!viewerIsPlatformAdmin && p.archived) {
       throw new NotFoundException('Subscription plan not found');
     }
-    const base = {
-      id: String(p._id),
-      name: p.name,
-      stripePriceId: p.stripePriceId,
-      amount: p.amount,
-      currency: p.currency,
-      interval: p.interval,
-      trialDays: p.trialDays,
-      isTrialEnabled: p.isTrialEnabled,
-      features: p.features,
-    };
-    if (viewerIsPlatformAdmin) {
-      return {
-        success: true,
-        message: 'OK',
-        data: {
-          ...base,
-          stripeProductId: p.stripeProductId,
-          archived: p.archived,
-        },
-      };
-    }
     return {
       success: true,
       message: 'OK',
-      data: base,
+      data: serializeSubscriptionPlan(p, {
+        includeAdminFields: viewerIsPlatformAdmin,
+      }),
     };
   }
 
@@ -196,10 +140,7 @@ export class SubscriptionPlanAdminService {
     id: string,
     dto: UpdateSubscriptionPlanDto,
   ): Promise<
-    ApiSuccessResponse<{
-      id: string;
-      stripePriceId: string;
-    }>
+    ApiSuccessResponse<SubscriptionPlanResponse>
   > {
     if (dto.archived !== undefined) {
       throw new BadRequestException(
@@ -221,6 +162,17 @@ export class SubscriptionPlanAdminService {
     if (pricingChanged) {
       throw new BadRequestException(
         'Price and billing interval are immutable for existing plans. Create a new plan version via POST /platform/subscription-plans.',
+      );
+    }
+
+    const effectivePlanName =
+      dto.name !== undefined ? dto.name : existing.name;
+    if (
+      dto.features?.aiChatbot === true &&
+      !isPlanNameAiChatbotTier(effectivePlanName)
+    ) {
+      throw new BadRequestException(
+        'AI assistant catalog override is only allowed for Pro or Enterprise plan names.',
       );
     }
 
@@ -248,11 +200,11 @@ export class SubscriptionPlanAdminService {
     return {
       success: true,
       message: 'Subscription plan updated',
-      data: { id: String(updated._id), stripePriceId: updated.stripePriceId },
+      data: serializeSubscriptionPlan(updated, { includeAdminFields: true }),
     };
   }
 
-  async archive(id: string): Promise<ApiSuccessResponse<{ id: string }>> {
+  async archive(id: string): Promise<ApiSuccessResponse<SubscriptionPlanResponse>> {
     const existing = await this.plans.findById(id);
     if (!existing) {
       throw new NotFoundException('Subscription plan not found');
@@ -274,7 +226,7 @@ export class SubscriptionPlanAdminService {
       success: true,
       message:
         'Subscription plan archived in Stripe and deactivated in catalog',
-      data: { id: String(updated._id) },
+      data: serializeSubscriptionPlan(updated, { includeAdminFields: true }),
     };
   }
 }
