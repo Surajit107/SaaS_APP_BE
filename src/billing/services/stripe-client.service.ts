@@ -4,7 +4,7 @@ import Stripe from 'stripe';
 
 @Injectable()
 export class StripeClientService {
-  private readonly stripe;
+  private readonly stripe: Stripe.Stripe;
 
   constructor(private readonly configService: ConfigService) {
     const secretKey = configService.getOrThrow<string>('STRIPE_SECRET_KEY');
@@ -13,7 +13,7 @@ export class StripeClientService {
     });
   }
 
-  getStripe() {
+  getStripe(): Stripe.Stripe {
     return this.stripe;
   }
 

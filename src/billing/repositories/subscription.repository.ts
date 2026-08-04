@@ -1,11 +1,19 @@
 import { Injectable } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
-import { Model } from 'mongoose';
+import { Model, type PipelineStage } from 'mongoose';
 import { isMongooseConnectionReady } from '../../common/mongoose/connection.util';
+import { escapeMongoRegexLiteral } from '../../common/utils/escape-mongo-regex-literal';
+import {
+  PLATFORM_SUBSCRIPTION_LIST_DEFAULT_SORT_BY,
+  PLATFORM_SUBSCRIPTION_LIST_DEFAULT_SORT_ORDER,
+  type PlatformSubscriptionListSortBy,
+  type PlatformSubscriptionListSortOrder,
+} from '../constants/platform-subscription-list.constants';
 import {
   Subscription,
   SubscriptionDocument,
 } from '../schemas/subscription.schema';
+import type { PlatformSubscriptionEnrichedRow } from '../types/platform-subscription-enriched-row.types';
 
 export interface UpsertTenantStripeSubscriptionInput {
   tenantId: string;
@@ -127,29 +135,161 @@ export class SubscriptionRepository {
       .exec();
   }
 
+  /**
+   * Paginated billing rows for platform operators, joined with tenant name/active.
+   * Search filters on tenant name or subscription tenantId (case-insensitive substring).
+   * Index note: `{ status: 1, updatedAt: -1 }` covers status + updatedAt sort; name search
+   * uses regex after `$lookup` (same approach as platform tenant list — no text index yet).
+   */
   async findManyPaginatedForPlatformAdmin(params: {
     skip: number;
     limit: number;
     status?: string;
     tenantId?: string;
-  }): Promise<{ items: SubscriptionDocument[]; total: number }> {
-    const filter: Record<string, string> = {};
+    search?: string;
+    sortBy?: PlatformSubscriptionListSortBy;
+    sortOrder?: PlatformSubscriptionListSortOrder;
+  }): Promise<{ items: PlatformSubscriptionEnrichedRow[]; total: number }> {
+    const match: Record<string, string> = {};
     if (params.status !== undefined && params.status.length > 0) {
-      filter.status = params.status;
+      match.status = params.status;
     }
     if (params.tenantId !== undefined && params.tenantId.length > 0) {
-      filter.tenantId = params.tenantId;
+      match.tenantId = params.tenantId;
     }
-    const [items, total] = await Promise.all([
-      this.model
-        .find(filter)
-        .sort({ updatedAt: -1 })
-        .skip(params.skip)
-        .limit(params.limit)
-        .exec(),
-      this.model.countDocuments(filter).exec(),
-    ]);
+
+    const sortBy =
+      params.sortBy ?? PLATFORM_SUBSCRIPTION_LIST_DEFAULT_SORT_BY;
+    const sortOrder =
+      params.sortOrder ?? PLATFORM_SUBSCRIPTION_LIST_DEFAULT_SORT_ORDER;
+    const direction: 1 | -1 = sortOrder === 'asc' ? 1 : -1;
+    const sortStage = this.buildPlatformAdminSortStage(sortBy, direction);
+
+    const pipeline: PipelineStage[] = [];
+    if (Object.keys(match).length > 0) {
+      pipeline.push({ $match: match });
+    }
+    pipeline.push(
+      {
+        $lookup: {
+          from: 'tenants',
+          localField: 'tenantId',
+          foreignField: 'tenantId',
+          as: 'tenant',
+        },
+      },
+      { $unwind: { path: '$tenant', preserveNullAndEmptyArrays: true } },
+    );
+
+    if (params.search !== undefined && params.search.length > 0) {
+      const safe = escapeMongoRegexLiteral(params.search);
+      pipeline.push({
+        $match: {
+          $or: [
+            { 'tenant.name': { $regex: safe, $options: 'i' } },
+            { tenantId: { $regex: safe, $options: 'i' } },
+          ],
+        },
+      });
+    }
+
+    pipeline.push({
+      $facet: {
+        items: [
+          { $sort: sortStage },
+          { $skip: params.skip },
+          { $limit: params.limit },
+          {
+            $project: {
+              _id: 0,
+              tenantId: 1,
+              status: 1,
+              planKey: 1,
+              stripeCustomerId: 1,
+              stripePriceId: 1,
+              stripeSubscriptionId: 1,
+              currentPeriodStart: 1,
+              currentPeriodEnd: 1,
+              cancelAtPeriodEnd: 1,
+              createdAt: 1,
+              updatedAt: 1,
+              tenantName: { $ifNull: ['$tenant.name', null] },
+              tenantIsActive: { $ifNull: ['$tenant.isActive', null] },
+            },
+          },
+        ],
+        total: [{ $count: 'count' }],
+      },
+    });
+
+    type FacetResult = {
+      items: PlatformSubscriptionEnrichedRow[];
+      total: Array<{ count: number }>;
+    };
+    const [facet] = await this.model.aggregate<FacetResult>(pipeline).exec();
+    const total =
+      facet?.total?.[0]?.count !== undefined ? facet.total[0].count : 0;
+    const items = facet?.items ?? [];
     return { items, total };
+  }
+
+  async findByTenantIdEnrichedForPlatformAdmin(
+    tenantId: string,
+  ): Promise<PlatformSubscriptionEnrichedRow | null> {
+    type Row = PlatformSubscriptionEnrichedRow;
+    const rows = await this.model
+      .aggregate<Row>([
+        { $match: { tenantId } },
+        {
+          $lookup: {
+            from: 'tenants',
+            localField: 'tenantId',
+            foreignField: 'tenantId',
+            as: 'tenant',
+          },
+        },
+        { $unwind: { path: '$tenant', preserveNullAndEmptyArrays: true } },
+        {
+          $project: {
+            _id: 0,
+            tenantId: 1,
+            status: 1,
+            planKey: 1,
+            stripeCustomerId: 1,
+            stripePriceId: 1,
+            stripeSubscriptionId: 1,
+            currentPeriodStart: 1,
+            currentPeriodEnd: 1,
+            cancelAtPeriodEnd: 1,
+            createdAt: 1,
+            updatedAt: 1,
+            tenantName: { $ifNull: ['$tenant.name', null] },
+            tenantIsActive: { $ifNull: ['$tenant.isActive', null] },
+          },
+        },
+        { $limit: 1 },
+      ])
+      .exec();
+    return rows[0] ?? null;
+  }
+
+  private buildPlatformAdminSortStage(
+    sortBy: PlatformSubscriptionListSortBy,
+    direction: 1 | -1,
+  ): Record<string, 1 | -1> {
+    switch (sortBy) {
+      case 'tenantName':
+        return { 'tenant.name': direction, updatedAt: -1 };
+      case 'status':
+        return { status: direction, updatedAt: -1 };
+      case 'planKey':
+        return { planKey: direction, updatedAt: -1 };
+      case 'createdAt':
+        return { createdAt: direction };
+      case 'updatedAt':
+      default:
+        return { updatedAt: direction };
+    }
   }
 
   /** Status histogram across all subscription rows (cross-tenant, platform operator only). */

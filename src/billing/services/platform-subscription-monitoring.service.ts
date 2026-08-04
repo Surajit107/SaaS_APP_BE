@@ -1,9 +1,13 @@
 import { BadRequestException, Injectable } from '@nestjs/common';
 import { Types } from 'mongoose';
 import type { ApiSuccessResponse } from '../../common/types/api-response.types';
+import {
+  PLATFORM_SUBSCRIPTION_LIST_DEFAULT_SORT_BY,
+  PLATFORM_SUBSCRIPTION_LIST_DEFAULT_SORT_ORDER,
+} from '../constants/platform-subscription-list.constants';
 import { PlatformSubscriptionListQueryDto } from '../dto/platform-subscription-list-query.dto';
 import { SubscriptionRepository } from '../repositories/subscription.repository';
-import type { SubscriptionDocument } from '../schemas/subscription.schema';
+import type { PlatformSubscriptionEnrichedRow } from '../types/platform-subscription-enriched-row.types';
 import type { PlatformSubscriptionSnapshot } from '../types/platform-subscription-snapshot.types';
 
 @Injectable()
@@ -33,6 +37,10 @@ export class PlatformSubscriptionMonitoringService {
         limit,
         status: query.status,
         tenantId: query.tenantId,
+        search: query.search,
+        sortBy: query.sortBy ?? PLATFORM_SUBSCRIPTION_LIST_DEFAULT_SORT_BY,
+        sortOrder:
+          query.sortOrder ?? PLATFORM_SUBSCRIPTION_LIST_DEFAULT_SORT_ORDER,
       });
     return {
       success: true,
@@ -52,13 +60,16 @@ export class PlatformSubscriptionMonitoringService {
     if (!Types.ObjectId.isValid(tenantId)) {
       throw new BadRequestException('Invalid tenant id');
     }
-    const doc = await this.subscriptions.findByTenantId(tenantId);
+    const doc =
+      await this.subscriptions.findByTenantIdEnrichedForPlatformAdmin(tenantId);
     if (!doc) {
       return {
         success: true,
         message: 'No billing record for tenant yet',
         data: {
           tenantId,
+          tenantName: null,
+          tenantIsActive: null,
           status: 'inactive',
           planKey: '',
           cancelAtPeriodEnd: false,
@@ -72,19 +83,31 @@ export class PlatformSubscriptionMonitoringService {
     };
   }
 
-  private toSnapshot(doc: SubscriptionDocument): PlatformSubscriptionSnapshot {
+  private toSnapshot(
+    doc: PlatformSubscriptionEnrichedRow,
+  ): PlatformSubscriptionSnapshot {
     return {
       tenantId: doc.tenantId,
+      tenantName: doc.tenantName,
+      tenantIsActive: doc.tenantIsActive,
       status: doc.status,
       planKey: doc.planKey,
       stripeCustomerId: doc.stripeCustomerId,
       stripePriceId: doc.stripePriceId,
       stripeSubscriptionId: doc.stripeSubscriptionId,
-      currentPeriodStart: doc.currentPeriodStart?.toISOString(),
-      currentPeriodEnd: doc.currentPeriodEnd?.toISOString(),
+      currentPeriodStart: doc.currentPeriodStart
+        ? new Date(doc.currentPeriodStart).toISOString()
+        : undefined,
+      currentPeriodEnd: doc.currentPeriodEnd
+        ? new Date(doc.currentPeriodEnd).toISOString()
+        : undefined,
       cancelAtPeriodEnd: doc.cancelAtPeriodEnd ?? false,
-      createdAt: doc.createdAt?.toISOString(),
-      updatedAt: doc.updatedAt?.toISOString(),
+      createdAt: doc.createdAt
+        ? new Date(doc.createdAt).toISOString()
+        : undefined,
+      updatedAt: doc.updatedAt
+        ? new Date(doc.updatedAt).toISOString()
+        : undefined,
     };
   }
 }
