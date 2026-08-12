@@ -77,7 +77,11 @@ export class UserMfaRepository {
           },
           $setOnInsert: { userId: objectId },
         },
-        { upsert: true, new: true, setDefaultsOnInsert: true },
+        {
+          upsert: true,
+          returnDocument: 'after',
+          setDefaultsOnInsert: true,
+        },
       )
       .exec();
     if (!doc) {
@@ -116,7 +120,7 @@ export class UserMfaRepository {
           lastUsedTotpStep: '',
         },
       },
-      { new: true },
+      { returnDocument: 'after' },
     );
     if (session) query.session(session);
     return query.exec();
@@ -138,7 +142,7 @@ export class UserMfaRepository {
             backupCodesGeneratedAt: '',
           },
         },
-        { new: true },
+        { returnDocument: 'after' },
       )
       .exec();
   }
@@ -194,7 +198,7 @@ export class UserMfaRepository {
       .findOneAndUpdate(
         { userId: objectId },
         { $set: { backupCodes, backupCodesGeneratedAt: new Date() } },
-        { new: true },
+        { returnDocument: 'after' },
       )
       .exec();
   }
@@ -212,7 +216,11 @@ export class UserMfaRepository {
           $set: { isEmailCodeLoginEnabled: isEnabled, tenantId },
           $setOnInsert: { userId: objectId },
         },
-        { upsert: true, new: true, setDefaultsOnInsert: true },
+        {
+          upsert: true,
+          returnDocument: 'after',
+          setDefaultsOnInsert: true,
+        },
       )
       .exec();
     if (!doc) {

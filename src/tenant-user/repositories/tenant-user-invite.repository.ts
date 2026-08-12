@@ -53,7 +53,7 @@ export class TenantUserInviteRepository {
           displayName: input.displayName,
         },
       },
-      { upsert: true, new: true },
+      { upsert: true, returnDocument: 'after' },
     );
     if (session) q.session(session);
     const doc = await q.exec();

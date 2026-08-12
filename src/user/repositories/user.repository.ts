@@ -237,7 +237,7 @@ export class UserRepository {
       const q = this.model.findOneAndUpdate(
         filter,
         { $unset: { displayName: 1 } },
-        { new: true },
+        { returnDocument: 'after' },
       );
       if (session) {
         q.session(session);
@@ -247,7 +247,7 @@ export class UserRepository {
     const q = this.model.findOneAndUpdate(
       filter,
       { $set: { displayName } },
-      { new: true },
+      { returnDocument: 'after' },
     );
     if (session) {
       q.session(session);
@@ -267,7 +267,7 @@ export class UserRepository {
     const q = this.model.findByIdAndUpdate(
       new Types.ObjectId(userId),
       { $set: fields },
-      { new: true },
+      { returnDocument: 'after' },
     );
     if (session) {
       q.session(session);
@@ -353,7 +353,7 @@ export class UserRepository {
         $set: { isEmailVerified: true },
         $unset: { emailVerifyTokenHash: 1, emailVerifyExpiresAt: 1 },
       },
-      { new: true },
+      { returnDocument: 'after' },
     );
     if (session) {
       q.session(session);

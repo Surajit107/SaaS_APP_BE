@@ -66,7 +66,11 @@ export class MfaChallengeRepository {
    */
   async recordFailedAttempt(jti: string): Promise<number | null> {
     const doc = await this.model
-      .findOneAndUpdate({ jti }, { $inc: { attemptCount: 1 } }, { new: true })
+      .findOneAndUpdate(
+        { jti },
+        { $inc: { attemptCount: 1 } },
+        { returnDocument: 'after' },
+      )
       .exec();
     return doc?.attemptCount ?? null;
   }
