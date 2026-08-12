@@ -7,6 +7,9 @@ import { TenantModule } from '../tenant/tenant.module';
 import { EmailModule } from '../email/email.module';
 import { AuthController } from './auth.controller';
 import { AuthService } from './auth.service';
+import { MfaController } from './mfa/mfa.controller';
+import { MfaModule } from './mfa/mfa.module';
+import { MfaService } from './mfa/mfa.service';
 import { JwtAuthGuard } from './guards/jwt-auth.guard';
 import { PlatformAdminGuard } from './guards/platform-admin.guard';
 import { TenantAdminGuard } from './guards/tenant-admin.guard';
@@ -29,6 +32,7 @@ import { parseJwtExpiresIn } from './utils/jwt-expires.util';
     forwardRef(() => TenantModule),
     EmailModule,
     ConfigModule,
+    MfaModule,
     JwtModule.registerAsync({
       imports: [ConfigModule],
       useFactory: (configService: ConfigService) => ({
@@ -47,9 +51,10 @@ import { parseJwtExpiresIn } from './utils/jwt-expires.util';
       { name: RefreshToken.name, schema: RefreshTokenSchema },
     ]),
   ],
-  controllers: [AuthController],
+  controllers: [AuthController, MfaController],
   providers: [
     AuthService,
+    MfaService,
     AuthIdentityRepository,
     RefreshTokenRepository,
     JwtAuthGuard,
@@ -59,6 +64,8 @@ import { parseJwtExpiresIn } from './utils/jwt-expires.util';
   ],
   exports: [
     AuthService,
+    /** Re-exported so platform tooling can read second-factor state for support. */
+    MfaModule,
     JwtModule,
     JwtAuthGuard,
     TenantGuard,

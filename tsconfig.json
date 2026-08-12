@@ -19,6 +19,9 @@
     "incremental": true,
     "skipLibCheck": true,
     "strictNullChecks": true,
+    // Mongoose schema classes and DTOs are populated by the ODM / ValidationPipe,
+    // never through a constructor, so initializer checks give false positives.
+    "strictPropertyInitialization": false,
     "forceConsistentCasingInFileNames": true,
     "noImplicitAny": true,
     "strictBindCallApply": true,

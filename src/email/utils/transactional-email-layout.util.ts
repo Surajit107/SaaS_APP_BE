@@ -79,6 +79,8 @@ export function buildTransactionalMail(params: {
   header?: { eyebrow: string; title: string };
   textSignature?: string;
   primaryAction?: { href: string; label: string };
+  /** One-time code, shown large and monospaced between the body and the CTA. */
+  codeBlock?: string;
   logoUrl?: string;
 }): { text: string; html: string } {
   const { brand, headline, bodyLines } = params;
@@ -96,6 +98,9 @@ export function buildTransactionalMail(params: {
   );
 
   const textParts: string[] = [headline, '', ...preCta];
+  if (params.codeBlock) {
+    textParts.push('', params.codeBlock);
+  }
   if (params.primaryAction) {
     textParts.push(
       '',
@@ -110,6 +115,13 @@ export function buildTransactionalMail(params: {
   const text = textParts.join('\n');
 
   const bodyHtmlMain = paragraphsHtml(preCta);
+  const codeHtml = params.codeBlock
+    ? `<table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="margin:18px 0;">
+<tr><td align="center" style="padding:16px 12px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:10px;">
+<div style="font-family:'SFMono-Regular',Consolas,'Liberation Mono',Menlo,monospace;font-size:30px;font-weight:700;letter-spacing:0.28em;color:#0f172a;">${escapeHtml(params.codeBlock)}</div>
+</td></tr>
+</table>`
+    : '';
   const ctaHtml = params.primaryAction
     ? primaryActionBlock(params.primaryAction)
     : '';
@@ -156,6 +168,7 @@ ${headerInner}
 <td style="padding:28px 26px 8px;font-family:system-ui,-apple-system,'Segoe UI',Roboto,'Helvetica Neue',Arial,sans-serif;">
 <h1 style="margin:0 0 18px;font-size:20px;font-weight:600;color:#0f172a;line-height:1.35;">${escapeHtml(headline)}</h1>
 ${bodyHtmlMain}
+${codeHtml}
 ${ctaHtml}
 ${bodyHtmlAfter}
 </td>

@@ -14,8 +14,40 @@ export class EmailService {
   private readonly log = new Logger(EmailService.name);
   private client: Resend | null = null;
   private warnedNotConfigured = false;
+  private recipientOverrides: Map<string, string> | null = null;
 
   constructor(private readonly config: ConfigService) {}
+
+  /**
+   * `EMAIL_RECIPIENT_OVERRIDES` — comma-separated `from:to` pairs, e.g.
+   * `admin@example.com:inbox@gmail.com`. Lets mail addressed to a mailbox that
+   * nobody actually reads (the seeded platform operator) land somewhere real
+   * without changing the account itself.
+   */
+  private getRecipientOverrides(): Map<string, string> {
+    if (this.recipientOverrides !== null) {
+      return this.recipientOverrides;
+    }
+    const overrides = new Map<string, string>();
+    const raw = this.config.get<string>('EMAIL_RECIPIENT_OVERRIDES')?.trim();
+    for (const pair of raw?.split(',') ?? []) {
+      const [from, to] = pair.split(':').map((part) => part.trim());
+      if (from?.includes('@') && to?.includes('@')) {
+        overrides.set(from.toLowerCase(), to);
+      }
+    }
+    this.recipientOverrides = overrides;
+    return overrides;
+  }
+
+  private resolveRecipient(to: string): string {
+    const override = this.getRecipientOverrides().get(to.toLowerCase());
+    if (override === undefined) {
+      return to;
+    }
+    this.log.log(`Redirecting mail for ${to} to ${override}`);
+    return override;
+  }
 
   /**
    * Bare RFC mailbox from `RESEND_FROM_EMAIL`.
@@ -152,6 +184,59 @@ export class EmailService {
     });
   }
 
+  /** One-time code for passwordless sign-in. */
+  async sendLoginCodeEmail(params: {
+    to: string;
+    code: string;
+    expiresInMinutes: number;
+  }): Promise<void> {
+    const brand = this.platformBrand();
+    const minutes = params.expiresInMinutes;
+    const subject = this.formatTransactionalSubject('Your sign-in code');
+    const { text, html } = buildTransactionalMail({
+      brand,
+      headline: 'Your sign-in code',
+      bodyLines: [
+        'Use this code to finish signing in. It works once and expires shortly.',
+      ],
+      codeBlock: params.code,
+      postActionLines: [
+        `This code expires in ${minutes} minute${minutes === 1 ? '' : 's'}.`,
+        'If you did not try to sign in, ignore this email and consider changing your password.',
+      ],
+      logoUrl: this.emailLogoUrl(),
+    });
+    await this.sendTransactional({
+      to: params.to,
+      subject,
+      text,
+      html,
+      fromDisplayName: brand,
+    });
+  }
+
+  /**
+   * Tells the account owner that its sign-in protection changed. Sent after the
+   * fact, so it doubles as the alarm if somebody else made the change.
+   */
+  async sendSecurityChangeEmail(params: {
+    to: string;
+    headline: string;
+    subjectLine: string;
+    bodyLines: string[];
+  }): Promise<void> {
+    await this.sendPlatformTransactional({
+      to: params.to,
+      subjectLine: params.subjectLine,
+      headline: params.headline,
+      bodyLines: params.bodyLines,
+      postActionLines: [
+        'If you did not make this change, reset your password immediately and contact support.',
+      ],
+      header: { eyebrow: 'Security', title: this.platformBrand() },
+    });
+  }
+
   /**
    * Organizer self-registration: send verification mail or throw if Resend reports failure.
    * Returns `'skipped'` when outbound email is not configured (no API key / from) — same as a no-op send.
@@ -244,10 +329,11 @@ export class EmailService {
     if (!client || !fromEmail) {
       return { kind: 'skipped' };
     }
-    const to = params.to.trim();
-    if (!to) {
+    const requestedTo = params.to.trim();
+    if (!requestedTo) {
       return { kind: 'skipped' };
     }
+    const to = this.resolveRecipient(requestedTo);
     const baseDisplay = params.fromDisplayName?.trim() || this.platformBrand();
     const displayName = /\((no reply|do not reply)\)/i.test(baseDisplay)
       ? baseDisplay

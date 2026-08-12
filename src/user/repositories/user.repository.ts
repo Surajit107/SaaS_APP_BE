@@ -181,6 +181,31 @@ export class UserRepository {
     return { docs, total };
   }
 
+  /**
+   * Cross-tenant lookup for platform operators, used to find an account that is
+   * locked out of its second factor. Search is required by the caller so this
+   * never turns into a full directory dump.
+   */
+  async searchForPlatformAdmin(
+    search: string,
+    limit: number,
+  ): Promise<UserDocument[]> {
+    const escaped = search.trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    if (escaped.length === 0) {
+      return [];
+    }
+    return this.model
+      .find({
+        $or: [
+          { email: { $regex: escaped, $options: 'i' } },
+          { displayName: { $regex: escaped, $options: 'i' } },
+        ],
+      })
+      .sort({ createdAt: -1 })
+      .limit(limit)
+      .exec();
+  }
+
   /** Tenant-scoped single-user lookup (never crosses tenant boundary). */
   async findByIdAndTenantId(
     userId: string,

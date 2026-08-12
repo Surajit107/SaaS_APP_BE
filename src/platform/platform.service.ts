@@ -12,12 +12,30 @@ import { toTenantPublic } from '../tenant/mappers/tenant-public.mapper';
 import { TenantRepository } from '../tenant/repositories/tenant.repository';
 import type { TenantPublic } from '../tenant/types/tenant-public.types';
 import { UserRepository } from '../user/repositories/user.repository';
+import { AuthService } from '../auth/auth.service';
+import { UserMfaRepository } from '../auth/mfa/repositories/user-mfa.repository';
 import type { PlatformTenantListQueryDto } from './dto/platform-tenant-list-query.dto';
+import type { PlatformUserSearchQueryDto } from './dto/platform-user-search-query.dto';
 
 /** Tenant directory row plus Mongo billing summary for platform list UI. */
 export type PlatformTenantListItem = TenantPublic & {
   subscription: { status: string; planKey: string } | null;
 };
+
+/** Enough to identify an account during lockout support, and nothing more. */
+export interface PlatformUserSearchItem {
+  id: string;
+  email: string;
+  displayName: string | null;
+  tenantId: string;
+  organizationName: string | null;
+  isPlatformAdmin: boolean;
+  isActive: boolean;
+  isTotpEnabled: boolean;
+  totpEnabledAt: string | null;
+}
+
+const USER_SEARCH_LIMIT = 10;
 
 @Injectable()
 export class PlatformService {
@@ -25,6 +43,8 @@ export class PlatformService {
     private readonly tenantRepository: TenantRepository,
     private readonly userRepository: UserRepository,
     private readonly subscriptionRepository: SubscriptionRepository,
+    private readonly userMfaRepository: UserMfaRepository,
+    private readonly authService: AuthService,
   ) {}
 
   async listTenants(query: PlatformTenantListQueryDto): Promise<
@@ -150,6 +170,59 @@ export class PlatformService {
         deletedAt: deleted.deletedAt!.toISOString(),
         purgeAt: deleted.purgeAt!.toISOString(),
       },
+    };
+  }
+
+  /**
+   * Account lookup for lockout support. Returns just enough to identify the
+   * right person and see whether a second factor is actually in the way.
+   */
+  async searchUsers(
+    query: PlatformUserSearchQueryDto,
+  ): Promise<ApiSuccessResponse<{ items: PlatformUserSearchItem[] }>> {
+    const users = await this.userRepository.searchForPlatformAdmin(
+      query.search,
+      USER_SEARCH_LIMIT,
+    );
+    const items = await Promise.all(
+      users.map(async (user): Promise<PlatformUserSearchItem> => {
+        const userId = user._id.toString();
+        const mfa = await this.userMfaRepository.findByUserId(userId);
+        const tenant =
+          (user.tenantId ?? '').length > 0
+            ? await this.tenantRepository.findByTenantId(user.tenantId)
+            : null;
+        return {
+          id: userId,
+          email: user.email,
+          displayName: user.displayName ?? null,
+          tenantId: user.tenantId ?? '',
+          organizationName: tenant?.name ?? null,
+          isPlatformAdmin: user.isPlatformAdmin === true,
+          isActive: user.isActive !== false,
+          isTotpEnabled: mfa?.isTotpEnabled === true,
+          totpEnabledAt: mfa?.totpEnabledAt?.toISOString() ?? null,
+        };
+      }),
+    );
+    return { success: true, message: 'OK', data: { items } };
+  }
+
+  async resetUserMfa(
+    userId: string,
+    performedByEmail: string,
+  ): Promise<ApiSuccessResponse<{ userId: string; revokedSessions: number }>> {
+    if (!Types.ObjectId.isValid(userId)) {
+      throw new BadRequestException('Invalid user id');
+    }
+    const { email, revokedSessions } = await this.authService.resetMfaForUser(
+      userId,
+      performedByEmail,
+    );
+    return {
+      success: true,
+      message: `Two-factor authentication reset for ${email}. They were signed out everywhere and notified by email.`,
+      data: { userId, revokedSessions },
     };
   }
 

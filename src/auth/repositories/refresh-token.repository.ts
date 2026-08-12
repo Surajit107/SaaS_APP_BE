@@ -59,4 +59,27 @@ export class RefreshTokenRepository {
   async deleteByFamilyId(familyId: string): Promise<void> {
     await this.model.deleteMany({ familyId }).exec();
   }
+
+  /**
+   * Signs the user out of every device. Used after security changes such as
+   * enabling or disabling two-factor authentication.
+   *
+   * Pass `exceptFamilyId` to keep the caller's own session alive.
+   */
+  async deleteByUserId(
+    userId: string,
+    exceptFamilyId?: string,
+  ): Promise<number> {
+    if (!Types.ObjectId.isValid(userId)) {
+      return 0;
+    }
+    const filter: Record<string, unknown> = {
+      userId: new Types.ObjectId(userId),
+    };
+    if (exceptFamilyId !== undefined && exceptFamilyId.length > 0) {
+      filter.familyId = { $ne: exceptFamilyId };
+    }
+    const result = await this.model.deleteMany(filter).exec();
+    return result.deletedCount;
+  }
 }

@@ -17,16 +17,19 @@ import {
   ApiTags,
 } from '@nestjs/swagger';
 import { ConfigService } from '@nestjs/config';
+import { Throttle, ThrottlerGuard } from '@nestjs/throttler';
 import type { Request, Response } from 'express';
 import { CurrentUser } from './decorators/current-user.decorator';
 import { LoginDto } from './dto/login.dto';
 import { RefreshTokenBodyDto } from './dto/refresh-token-body.dto';
 import { RegisterDto } from './dto/register.dto';
+import { RequestLoginCodeDto } from './dto/request-login-code.dto';
 import { VerifyEmailDto } from './dto/verify-email.dto';
 import { JwtAuthGuard } from './guards/jwt-auth.guard';
 import { TenantGuard } from './guards/tenant.guard';
-import { AuthService } from './auth.service';
+import { AuthService, isMfaRequired } from './auth.service';
 import type { AuthSessionPayload } from './auth.service';
+import { VerifyMfaDto } from './mfa/dto/mfa.dto';
 import { AuthenticatedRequestUser } from './types/auth-request-user.types';
 import {
   ACCESS_TOKEN_COOKIE,
@@ -34,9 +37,11 @@ import {
   buildAuthCookieClearOptions,
   buildAuthCookieOptions,
 } from './utils/auth-cookie.util';
+import { AuthThrottle } from './utils/auth-throttle.util';
 
 @ApiTags('Auth')
 @Controller('auth')
+@UseGuards(ThrottlerGuard)
 export class AuthController {
   constructor(
     private readonly authService: AuthService,
@@ -51,6 +56,7 @@ export class AuthController {
 
   @Post('register')
   @HttpCode(HttpStatus.CREATED)
+  @Throttle(AuthThrottle.register)
   @ApiOperation({
     summary:
       'Register the first user and a new organization (tenant is created server-side). Sends email verification — no session until POST /auth/verify-email then POST /auth/login.',
@@ -62,6 +68,7 @@ export class AuthController {
 
   @Post('verify-email')
   @HttpCode(HttpStatus.OK)
+  @Throttle(AuthThrottle.verifyEmail)
   @ApiOperation({
     summary:
       'Confirm the registering user’s email using the token from the verification message.',
@@ -72,16 +79,51 @@ export class AuthController {
   }
 
   @Post('login')
+  @Throttle(AuthThrottle.login)
   @ApiOperation({
     summary:
       'Log in with email and password. For tenant scope, send tenantRole (admin|member) matching the sign-in page; platform scope omits tenantRole.',
   })
   @ApiResponse({ status: 401, description: 'Invalid credentials' })
+  @ApiResponse({ status: 429, description: 'Too many sign-in attempts' })
   async login(
     @Body() body: LoginDto,
     @Res({ passthrough: true }) response: Response,
   ) {
     const result = await this.authService.login(body);
+    // A challenge is not a session: no cookies until the second factor passes.
+    if (!isMfaRequired(result.data)) {
+      this.setSessionCookies(response, result.data);
+    }
+    return result;
+  }
+
+  @Post('login/email-code')
+  @HttpCode(HttpStatus.OK)
+  @Throttle(AuthThrottle.requestLoginCode)
+  @ApiOperation({
+    summary:
+      'Email a one-time sign-in code. Answers with a challenge to complete at POST /auth/mfa/verify. The response never reveals whether the address belongs to an account.',
+  })
+  @ApiResponse({ status: 429, description: 'Too many code requests' })
+  async requestLoginCode(@Body() body: RequestLoginCodeDto) {
+    return this.authService.requestLoginCode(body);
+  }
+
+  @Post('mfa/verify')
+  @HttpCode(HttpStatus.OK)
+  @Throttle(AuthThrottle.verifyCode)
+  @ApiOperation({
+    summary:
+      'Finish a sign-in that requires a second factor. Accepts a 6-digit authenticator code or a recovery code.',
+  })
+  @ApiResponse({ status: 401, description: 'Invalid or expired challenge, or wrong code' })
+  @ApiResponse({ status: 429, description: 'Too many verification attempts' })
+  async verifyMfa(
+    @Body() body: VerifyMfaDto,
+    @Res({ passthrough: true }) response: Response,
+  ) {
+    const result = await this.authService.verifyMfaChallenge(body);
     this.setSessionCookies(response, result.data);
     return result;
   }

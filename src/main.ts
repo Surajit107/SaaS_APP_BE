@@ -11,6 +11,7 @@ async function bootstrap() {
     rawBody: true,
   });
   app.use(cookieParser());
+  configureTrustProxy(app);
   configureHttpApp(app);
 
   const port = Number(process.env.PORT) || 3000;
@@ -21,6 +22,24 @@ async function bootstrap() {
   logger.log(`REST API base: ${localBase}/api`);
   logger.log(`Swagger UI (call APIs here): ${localBase}/api/docs`);
   logger.log(`OpenAPI spec: ${localBase}/api/docs/json`);
+}
+
+/**
+ * Behind a proxy (ngrok, a load balancer), every request arrives from the
+ * proxy's IP. Without this, rate limiting would treat all clients as one.
+ *
+ * `TRUST_PROXY_HOPS` is the number of proxies in front of this server; leave it
+ * unset when the app is reached directly.
+ */
+function configureTrustProxy(app: NestExpressApplication): void {
+  const hops = Number.parseInt(process.env.TRUST_PROXY_HOPS ?? '', 10);
+  if (!Number.isFinite(hops) || hops <= 0) {
+    return;
+  }
+  app.set('trust proxy', hops);
+  new Logger('Bootstrap').log(
+    `Trusting ${hops} proxy hop(s) for client IP resolution`,
+  );
 }
 
 void bootstrap();

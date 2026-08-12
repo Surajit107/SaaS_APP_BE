@@ -7,6 +7,7 @@ import {
   HttpStatus,
   Param,
   Patch,
+  Post,
   Query,
   UseGuards,
 } from '@nestjs/common';
@@ -17,14 +18,17 @@ import {
   ApiResponse,
   ApiTags,
 } from '@nestjs/swagger';
+import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { PlatformAdminGuard } from '../auth/guards/platform-admin.guard';
+import type { AuthenticatedRequestUser } from '../auth/types/auth-request-user.types';
 import { UpdateTenantDto } from '../tenant/dto/update-tenant.dto';
 import {
   PLATFORM_ANALYTICS_DEFAULT_RANGE_DAYS,
   PlatformAnalyticsQueryDto,
 } from './dto/platform-analytics-query.dto';
 import { PlatformTenantListQueryDto } from './dto/platform-tenant-list-query.dto';
+import { PlatformUserSearchQueryDto } from './dto/platform-user-search-query.dto';
 import { PlatformService } from './platform.service';
 import { PlatformAnalyticsService } from './services/platform-analytics.service';
 
@@ -112,5 +116,29 @@ export class PlatformController {
   @ApiResponse({ status: 409, description: 'Already soft-deleted' })
   deleteTenant(@Param('tenantId') tenantId: string) {
     return this.platformService.softDeleteTenant(tenantId);
+  }
+
+  @Get('users')
+  @ApiOperation({
+    summary:
+      'Find accounts by email or name (cross-tenant) for lockout support. Includes whether a second factor is enabled.',
+  })
+  searchUsers(@Query() query: PlatformUserSearchQueryDto) {
+    return this.platformService.searchUsers(query);
+  }
+
+  @Post('users/:userId/mfa/reset')
+  @HttpCode(HttpStatus.OK)
+  @ApiParam({ name: 'userId' })
+  @ApiOperation({
+    summary:
+      'Clear a user’s second factor after a lockout. Signs them out everywhere and emails them about it.',
+  })
+  @ApiResponse({ status: 404, description: 'User not found' })
+  resetUserMfa(
+    @Param('userId') userId: string,
+    @CurrentUser() operator: AuthenticatedRequestUser | undefined,
+  ) {
+    return this.platformService.resetUserMfa(userId, operator?.email ?? '');
   }
 }

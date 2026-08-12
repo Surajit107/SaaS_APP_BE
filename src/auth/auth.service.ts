@@ -5,6 +5,7 @@ import {
   Injectable,
   InternalServerErrorException,
   Logger,
+  NotFoundException,
   UnauthorizedException,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
@@ -24,6 +25,7 @@ import { TenantService } from '../tenant/tenant.service';
 import type { AuthLoginScope, TenantLoginPortalRole } from './dto/login.dto';
 import { LoginDto } from './dto/login.dto';
 import { RegisterDto } from './dto/register.dto';
+import { RequestLoginCodeDto } from './dto/request-login-code.dto';
 import { VerifyEmailDto } from './dto/verify-email.dto';
 import { AuthenticatedRequestUser } from './types/auth-request-user.types';
 import { JwtAccessPayload } from './types/jwt-payload.types';
@@ -34,9 +36,18 @@ import {
 } from '../common/domain-events/tenant-auth.domain-events';
 import { isTransactionUnavailableError } from '../common/mongoose/transaction.util';
 import { EmailService } from '../email/email.service';
+import { VerifyMfaDto } from './mfa/dto/mfa.dto';
+import { UserMfaRepository } from './mfa/repositories/user-mfa.repository';
+import type { MfaChallengeDocument } from './mfa/schemas/mfa-challenge.schema';
+import { EmailCodeService } from './mfa/services/email-code.service';
+import { MfaChallengeService } from './mfa/services/mfa-challenge.service';
+import { MfaVerificationService } from './mfa/services/mfa-verification.service';
+import type { MfaRequiredPayload } from './mfa/types/mfa.types';
 
 const BCRYPT_ROUNDS = 12;
 const EMAIL_VERIFY_TTL_MS = 48 * 3600 * 1000;
+/** Emailed codes travel through a slower channel, so they live longer than a TOTP challenge. */
+const EMAIL_CODE_TTL_MINUTES = 10;
 
 function tenantHasPendingEmailVerification(user: UserDocument): boolean {
   const hash = user.emailVerifyTokenHash;
@@ -106,6 +117,19 @@ export interface AuthSessionPayload {
   };
 }
 
+/**
+ * `login` returns a full session only when no second factor is required.
+ * Otherwise it returns a challenge and the caller must complete
+ * `POST /auth/mfa/verify` before any token exists.
+ */
+export type LoginResult = AuthSessionPayload | MfaRequiredPayload;
+
+export function isMfaRequired(
+  result: LoginResult,
+): result is MfaRequiredPayload {
+  return (result as MfaRequiredPayload).mfaRequired === true;
+}
+
 /** Returned by `register` — no tokens; client must verify email then call `login`. */
 export interface RegisterSuccessPayload {
   email: string;
@@ -128,6 +152,10 @@ export class AuthService {
     private readonly authIdentityRepository: AuthIdentityRepository,
     private readonly eventEmitter: EventEmitter2,
     private readonly emailService: EmailService,
+    private readonly userMfaRepository: UserMfaRepository,
+    private readonly mfaChallengeService: MfaChallengeService,
+    private readonly mfaVerificationService: MfaVerificationService,
+    private readonly emailCodeService: EmailCodeService,
   ) {}
 
   getModuleStatus(): ApiSuccessResponse<{
@@ -399,7 +427,7 @@ export class AuthService {
   }
 
 
-  async login(dto: LoginDto): Promise<ApiSuccessResponse<AuthSessionPayload>> {
+  async login(dto: LoginDto): Promise<ApiSuccessResponse<LoginResult>> {
     const user = await this.userRepository.findByEmailWithCredentials(
       dto.email,
     );
@@ -425,12 +453,247 @@ export class AuthService {
       throw new UnauthorizedException('Invalid credentials');
     }
     assertTenantLoginPortalMatchesRole(dto, user);
+
+    const userId = user._id.toString();
+    const mfa = await this.userMfaRepository.findByUserId(userId);
+    if (mfa?.isTotpEnabled === true) {
+      const challenge = await this.mfaChallengeService.issue({
+        userId,
+        tenantId: user.tenantId ?? '',
+        purpose: 'totp',
+        authScope: dto.authScope,
+        tenantRole: dto.tenantRole,
+      });
+      return {
+        success: true,
+        message: 'Enter the code from your authenticator app to finish signing in.',
+        data: {
+          mfaRequired: true,
+          challengeToken: challenge.challengeToken,
+          methods: ['totp', 'backup_code'],
+          expiresAt: challenge.expiresAt.toISOString(),
+        },
+      };
+    }
+
     const session = await this.issueTokenPair(user);
     return {
       success: true,
       message: 'Authenticated',
       data: session,
     };
+  }
+
+  /**
+   * Emails a one-time code that signs the user in without a password.
+   *
+   * The response is deliberately identical whether or not the address belongs to
+   * an account: an ineligible request still gets a challenge token, it just has
+   * no code behind it. Otherwise this endpoint would enumerate every user.
+   */
+  async requestLoginCode(
+    dto: RequestLoginCodeDto,
+  ): Promise<ApiSuccessResponse<MfaRequiredPayload>> {
+    const email = dto.email.toLowerCase().trim();
+    const user = await this.userRepository.findByEmailWithCredentials(email);
+    const eligible =
+      user !== null &&
+      user !== undefined &&
+      (await this.isEligibleForEmailCodeLogin(user, dto));
+
+    const ttlMinutes = this.getEmailCodeTtlMinutes();
+    let codeHash: string | undefined;
+    let plainCode: string | undefined;
+    if (eligible) {
+      const generated = await this.emailCodeService.generate();
+      codeHash = generated.codeHash;
+      plainCode = generated.code;
+    }
+
+    const challenge = await this.mfaChallengeService.issue({
+      userId: eligible ? user?._id.toString() : undefined,
+      tenantId: eligible ? (user?.tenantId ?? '') : '',
+      purpose: 'email_code',
+      authScope: dto.authScope,
+      tenantRole: dto.tenantRole,
+      codeHash,
+      ttlMinutes,
+    });
+
+    if (plainCode !== undefined) {
+      // Delivery problems must not change the response, or failures would leak
+      // which addresses are real.
+      try {
+        await this.emailService.sendLoginCodeEmail({
+          to: email,
+          code: plainCode,
+          expiresInMinutes: ttlMinutes,
+        });
+      } catch (error: unknown) {
+        this.log.error(
+          `Failed to send login code to ${email}: ${error instanceof Error ? error.message : 'unknown error'}`,
+        );
+      }
+    }
+
+    return {
+      success: true,
+      message:
+        'If that address belongs to an account, a sign-in code is on its way.',
+      data: {
+        mfaRequired: true,
+        challengeToken: challenge.challengeToken,
+        methods: ['email_code'],
+        expiresAt: challenge.expiresAt.toISOString(),
+      },
+    };
+  }
+
+  /**
+   * Mirrors every gate `login` applies, minus the password. Returns false rather
+   * than throwing so the caller can stay silent about the reason.
+   */
+  private async isEligibleForEmailCodeLogin(
+    user: UserDocument,
+    dto: RequestLoginCodeDto,
+  ): Promise<boolean> {
+    if (user.isActive === false) {
+      return false;
+    }
+    if (dto.authScope === 'platform') {
+      if (user.isPlatformAdmin !== true) {
+        return false;
+      }
+    } else {
+      if (user.isPlatformAdmin === true || !(user.tenantId ?? '').trim()) {
+        return false;
+      }
+      if (user.role !== dto.tenantRole) {
+        return false;
+      }
+      if (tenantHasPendingEmailVerification(user)) {
+        return false;
+      }
+    }
+
+    const mfa = await this.userMfaRepository.findByUserId(user._id.toString());
+    return mfa?.isEmailCodeLoginEnabled !== false;
+  }
+
+  private getEmailCodeTtlMinutes(): number {
+    const parsed = Number.parseInt(
+      this.configService.get<string>('MFA_EMAIL_CODE_TTL_MINUTES') ?? '',
+      10,
+    );
+    return Number.isFinite(parsed) && parsed > 0
+      ? parsed
+      : EMAIL_CODE_TTL_MINUTES;
+  }
+
+  /**
+   * Completes a login that was interrupted by a second-factor challenge.
+   *
+   * Scope and role come from the stored challenge rather than the request, so
+   * this step cannot be used to escalate the session it was issued for.
+   */
+  async verifyMfaChallenge(
+    dto: VerifyMfaDto,
+  ): Promise<ApiSuccessResponse<AuthSessionPayload>> {
+    const challenge = await this.mfaChallengeService.load(dto.challengeToken);
+    const userId = challenge.userId?.toString();
+    if (userId === undefined || userId.length === 0) {
+      throw new UnauthorizedException(
+        'This verification request is no longer valid. Please sign in again.',
+      );
+    }
+
+    const user = await this.userRepository.findByIdForTokenRefresh(userId);
+    if (!user) {
+      throw new UnauthorizedException('Invalid credentials');
+    }
+    assertLoginScopeMatchesUser(challenge.authScope, user);
+    if (user.isActive === false) {
+      throw new UnauthorizedException('Account is not active.');
+    }
+
+    // An emailed code proves control of the mailbox, which is a factor in its
+    // own right — so it completes the login even when TOTP is enabled.
+    const method =
+      challenge.purpose === 'email_code'
+        ? await this.verifyEmailCodeChallenge(challenge, dto.code)
+        : await this.mfaVerificationService.verify(userId, dto.code);
+    if (method === null) {
+      // Throws with the number of attempts left, or retires the challenge.
+      await this.mfaChallengeService.registerFailedAttempt(challenge);
+    }
+
+    await this.mfaChallengeService.consume(challenge);
+    const session = await this.issueTokenPair(user);
+    await this.mfaChallengeService.clearForUser(userId);
+
+    this.log.log(`MFA login completed for user ${userId} via ${String(method)}`);
+    return {
+      success: true,
+      message:
+        method === 'backup_code'
+          ? 'Authenticated with a recovery code. That code has now been used.'
+          : 'Authenticated',
+      data: session,
+    };
+  }
+
+  /**
+   * Platform-operator recovery for someone locked out of their own account:
+   * clears the second factor entirely and drops every session, so the next
+   * sign-in is password-only. The account owner is always told it happened.
+   */
+  async resetMfaForUser(
+    userId: string,
+    performedByEmail: string,
+  ): Promise<{ email: string; revokedSessions: number }> {
+    const user = await this.userRepository.findById(userId);
+    if (!user) {
+      throw new NotFoundException('User not found');
+    }
+
+    await this.userMfaRepository.disableTotp(userId);
+    await this.mfaChallengeService.clearForUser(userId);
+    const revokedSessions =
+      await this.refreshTokenRepository.deleteByUserId(userId);
+
+    this.log.warn(
+      `MFA reset for user ${userId} by platform operator ${performedByEmail}; revoked ${revokedSessions} session(s)`,
+    );
+
+    try {
+      await this.emailService.sendSecurityChangeEmail({
+        to: user.email,
+        subjectLine: 'Two-factor authentication was reset',
+        headline: 'Two-factor authentication was reset on your account',
+        bodyLines: [
+          'A platform administrator reset the second factor on your account, usually in response to a lockout request.',
+          'You can sign in with your password alone right now. Any recovery codes you saved no longer work.',
+          'Set up an authenticator app again from your security settings to restore protection.',
+        ],
+      });
+    } catch (error: unknown) {
+      this.log.error(
+        `Failed to send MFA reset notice to ${user.email}: ${error instanceof Error ? error.message : 'unknown error'}`,
+      );
+    }
+
+    return { email: user.email, revokedSessions };
+  }
+
+  private async verifyEmailCodeChallenge(
+    challenge: MfaChallengeDocument,
+    submittedCode: string,
+  ): Promise<'email_code' | null> {
+    const matches = await this.emailCodeService.verify(
+      submittedCode,
+      challenge.codeHash,
+    );
+    return matches ? 'email_code' : null;
   }
 
   async refresh(
