@@ -14,40 +14,8 @@ export class EmailService {
   private readonly log = new Logger(EmailService.name);
   private client: Resend | null = null;
   private warnedNotConfigured = false;
-  private recipientOverrides: Map<string, string> | null = null;
 
   constructor(private readonly config: ConfigService) {}
-
-  /**
-   * `EMAIL_RECIPIENT_OVERRIDES` — comma-separated `from:to` pairs, e.g.
-   * `admin@example.com:inbox@gmail.com`. Lets mail addressed to a mailbox that
-   * nobody actually reads (the seeded platform operator) land somewhere real
-   * without changing the account itself.
-   */
-  private getRecipientOverrides(): Map<string, string> {
-    if (this.recipientOverrides !== null) {
-      return this.recipientOverrides;
-    }
-    const overrides = new Map<string, string>();
-    const raw = this.config.get<string>('EMAIL_RECIPIENT_OVERRIDES')?.trim();
-    for (const pair of raw?.split(',') ?? []) {
-      const [from, to] = pair.split(':').map((part) => part.trim());
-      if (from?.includes('@') && to?.includes('@')) {
-        overrides.set(from.toLowerCase(), to);
-      }
-    }
-    this.recipientOverrides = overrides;
-    return overrides;
-  }
-
-  private resolveRecipient(to: string): string {
-    const override = this.getRecipientOverrides().get(to.toLowerCase());
-    if (override === undefined) {
-      return to;
-    }
-    this.log.log(`Redirecting mail for ${to} to ${override}`);
-    return override;
-  }
 
   /**
    * Bare RFC mailbox from `RESEND_FROM_EMAIL`.
@@ -329,11 +297,10 @@ export class EmailService {
     if (!client || !fromEmail) {
       return { kind: 'skipped' };
     }
-    const requestedTo = params.to.trim();
-    if (!requestedTo) {
+    const to = params.to.trim();
+    if (!to) {
       return { kind: 'skipped' };
     }
-    const to = this.resolveRecipient(requestedTo);
     const baseDisplay = params.fromDisplayName?.trim() || this.platformBrand();
     const displayName = /\((no reply|do not reply)\)/i.test(baseDisplay)
       ? baseDisplay
